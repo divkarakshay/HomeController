@@ -13,10 +13,16 @@ object Protocol {
 
     const val CMD_SET: Byte = 0x01
     const val CMD_GET: Byte = 0x02
+    const val CMD_SET_MODE: Byte = 0x03
+    const val CMD_GET_MODE: Byte = 0x04
 
     const val RSP_SET_OK: Byte = 0xA2.toByte()
     const val RSP_GET_ALL: Byte = 0xA4.toByte()
     const val RSP_STATE_CHANGED: Byte = 0xA5.toByte()
+    const val RSP_MODE: Byte = 0xA6.toByte()
+
+    const val MODE_RESTORE_LAST = 0
+    const val MODE_ALL_OFF = 1
 
     const val RELAY_COUNT = 8
     const val RELAY_CH_FAN = 0
@@ -30,6 +36,10 @@ object Protocol {
         byteArrayOf(CMD_SET, channel.toByte(), if (on) 1 else 0)
 
     val getPacket: ByteArray = byteArrayOf(CMD_GET)
+
+    fun setModePacket(mode: Int): ByteArray = byteArrayOf(CMD_SET_MODE, mode.toByte())
+
+    val getModePacket: ByteArray = byteArrayOf(CMD_GET_MODE)
 
     fun parseStates(data: ByteArray): List<Boolean>? {
         if (data.size != 1 + RELAY_COUNT) return null

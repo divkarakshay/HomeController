@@ -28,6 +28,7 @@ class BleRelayManager(private val context: Context) {
         fun onDisconnected()
         fun onStates(states: List<Boolean>)
         fun onStateChanged(channel: Int, on: Boolean) {}
+        fun onRestoreMode(mode: Int) {}
         fun onError(message: String)
     }
 
@@ -162,6 +163,16 @@ class BleRelayManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    fun setRestoreMode(mode: Int) {
+        writeChar?.let { write(it, Protocol.setModePacket(mode)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun requestRestoreMode() {
+        writeChar?.let { write(it, Protocol.getModePacket) }
+    }
+
+    @SuppressLint("MissingPermission")
     private fun enableNotifications(g: BluetoothGatt, char: BluetoothGattCharacteristic) {
         waitingForNotifications = true
         runCatching { g.setCharacteristicNotification(char, true) }
@@ -193,13 +204,14 @@ class BleRelayManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun write(char: BluetoothGattCharacteristic, bytes: ByteArray) {
         val g = gatt ?: return
+        Log.d(TAG, "Sending " + bytes.joinToString(" ") { "%02X".format(it) })
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(char, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+            g.writeCharacteristic(char, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
         } else {
             @Suppress("DEPRECATION")
             char.value = bytes
             @Suppress("DEPRECATION")
-            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             @Suppress("DEPRECATION")
             g.writeCharacteristic(char)
         }
@@ -289,6 +301,10 @@ class BleRelayManager(private val context: Context) {
                         listener?.onStateChanged(channel, on)
                     }
                 }
+            }
+            Protocol.RSP_MODE -> {
+                Log.d(TAG, "Restore mode received")
+                if (data.size == 2) listener?.onRestoreMode(data[1].toInt())
             }
             Protocol.RSP_SET_OK -> Log.d(TAG, "Set applied")
         }

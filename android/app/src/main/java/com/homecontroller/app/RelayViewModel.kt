@@ -17,6 +17,7 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         val connecting: Boolean = false,
         val bluetoothOn: Boolean = true,
         val states: List<Boolean> = List(Protocol.RELAY_COUNT) { false },
+        val restoreMode: Int = Protocol.MODE_RESTORE_LAST,
         val error: String? = null
     )
 
@@ -35,6 +36,10 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(connected = true, connecting = false, bluetoothOn = true, error = null)
                 }
                 manager.refresh()
+                viewModelScope.launch {
+                    delay(150)
+                    manager.requestRestoreMode()
+                }
             }
 
             override fun onDisconnected() {
@@ -61,6 +66,10 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                     list[channel] = on
                     s.copy(states = list)
                 }
+            }
+
+            override fun onRestoreMode(mode: Int) {
+                _state.update { it.copy(restoreMode = mode) }
             }
 
             override fun onError(message: String) {
@@ -95,6 +104,15 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             _state.update { it.copy(error = "Not connected") }
         }
+    }
+
+    fun setRestoreMode(mode: Int) {
+        if (!_state.value.connected) {
+            _state.update { it.copy(error = "Connect to ${Protocol.DEVICE_NAME} to change this setting") }
+            return
+        }
+        _state.update { it.copy(restoreMode = mode) }
+        manager.setRestoreMode(mode)
     }
 
     fun disconnect() {

@@ -13,17 +13,26 @@
 // Command packets written to WRITE_CHAR:
 //   [0x01, channel, 0x00/0x01]      -> set single relay
 //   [0x02]                          -> request all states
+//   [0x03, mode]                    -> set power-restore mode (0=last state, 1=all off)
+//   [0x04]                          -> request power-restore mode
 // Response packets notified on STATUS_CHAR:
 //   [0xA2, channel, state]          -> set command applied
 //   [0xA4, s0..s7]                  -> get-all response (also pushed on subscribe)
 //   [0xA5, channel, state]          -> manual switch changed the relay
+//   [0xA6, mode]                    -> power-restore mode
 static const uint8_t CMD_SET       = 0x01;
 static const uint8_t CMD_GET       = 0x02;
+static const uint8_t CMD_SET_MODE  = 0x03;
+static const uint8_t CMD_GET_MODE  = 0x04;
 static const uint8_t RSP_SET_OK    = 0xA2;
 static const uint8_t RSP_GET_ALL   = 0xA4;
 static const uint8_t RSP_STATE_CHANGED = 0xA5;
+static const uint8_t RSP_MODE_OK   = 0xA6;
 static const uint8_t RSP_ERR_CMD   = 0xE1;
 static const uint8_t RSP_ERR_CH    = 0xE2;
+
+static const uint8_t RESTORE_LAST   = 0;
+static const uint8_t RESTORE_ALL_OFF = 1;
 
 static uint8_t g_states[RELAY_COUNT] = {0};
 static BLECharacteristic* g_statusChar = nullptr;
@@ -35,6 +44,7 @@ static uint32_t g_switchSince[RELAY_COUNT] = {0};
 static Preferences g_prefs;
 static const char NVS_NAMESPACE[] = "relay";
 static const char NVS_KEY[] = "states";
+static const char NVS_MODE_KEY[] = "restore";
 
 void setRelay(uint8_t ch, bool on) {
   if (ch >= RELAY_COUNT) return;
@@ -102,13 +112,18 @@ void handleSwitches() {
   }
 }
 
+static uint16_t g_lastConnHandle = BLE_HS_CONN_HANDLE_NONE;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+    if (desc->conn_handle == g_lastConnHandle) return;
+    g_lastConnHandle = desc->conn_handle;
     Serial.printf("[BLE] client connected (%u)\n", server->getConnectedCount());
     NimBLEDevice::startAdvertising();
   }
 
   void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+    g_lastConnHandle = BLE_HS_CONN_HANDLE_NONE;
     Serial.printf("[BLE] client disconnected (%u left)\n", server->getConnectedCount());
     NimBLEDevice::startAdvertising();
   }
@@ -136,6 +151,8 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
     uint8_t out[1 + RELAY_COUNT] = {0};
     size_t outLen = 0;
 
+    Serial.printf("[BLE] write: %02X len=%u\n", d[0], (unsigned)n);
+
     switch (d[0]) {
       case CMD_SET:
         if (n != 3 || d[1] >= RELAY_COUNT) { out[0] = RSP_ERR_CH; outLen = 1; break; }
@@ -149,6 +166,21 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
 
       case CMD_GET:
         respondStates(RSP_GET_ALL, out, outLen);
+        break;
+
+      case CMD_SET_MODE:
+        if (n != 2 || d[1] > RESTORE_ALL_OFF) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
+        g_prefs.putUChar(NVS_MODE_KEY, d[1]);
+        out[0] = RSP_MODE_OK;
+        out[1] = d[1];
+        outLen = 2;
+        Serial.printf("[NVS] restore mode = %s\n", d[1] == RESTORE_ALL_OFF ? "all off" : "last state");
+        break;
+
+      case CMD_GET_MODE:
+        out[0] = RSP_MODE_OK;
+        out[1] = g_prefs.getUChar(NVS_MODE_KEY, RESTORE_LAST);
+        outLen = 2;
         break;
 
       default:
@@ -173,8 +205,14 @@ void setup() {
     setRelay(i, false);
   }
 
-  // Restore the last saved (app or switch) states from flash memory.
-  restoreStatesFromNvs();
+  // Restore the last saved (app or switch) states from flash memory —
+  // unless the configured mode is "all off" after a power restore.
+  uint8_t restoreMode = g_prefs.getUChar(NVS_MODE_KEY, RESTORE_LAST);
+  Serial.printf("[NVS] restore mode: %s\n",
+                restoreMode == RESTORE_ALL_OFF ? "all off" : "last state");
+  if (restoreMode == RESTORE_LAST) {
+    restoreStatesFromNvs();
+  }
 
   // A switch that is physically ON always wins over the saved state.
   for (uint8_t i = 0; i < RELAY_COUNT; i++) {

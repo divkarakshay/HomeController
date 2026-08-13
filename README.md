@@ -32,7 +32,7 @@ living room) controlled over **Bluetooth Low Energy (BLE)** — no pairing, no r
 
 | Relay channel | Device     | ESP32 GPIO |
 |---------------|------------|------------|
-| CH0           | Fan        | GPIO4  (IN1) |
+| CH0           | Fan        | GPIO2  (IN1) |
 | CH1           | Light 1    | GPIO16 (IN2) |
 | CH2           | Light 2    | GPIO17 (IN3) |
 | CH3           | Light 3    | GPIO5  (IN4) |
@@ -84,6 +84,19 @@ switch) and restored at boot, so app-set states survive power cuts:
 A physically-ON switch always overrides the saved state at boot. NVS writes happen only
 when a relay actually changes, so flash wear is negligible.
 
+## Power restore mode
+
+What the ESP32 does at boot after a power cut is configurable from the app
+(**⋮ → Settings → Power Restore**):
+
+| Mode      | Power returns →                                  |
+|-----------|--------------------------------------------------|
+| Last state (default) | App-set states restored from flash (ON ones come back ON) |
+| All off   | All relays start OFF regardless of saved states   |
+
+- The setting itself is saved in NVS and survives power cuts.
+- A physically-ON toggle switch still always wins at boot, in both modes.
+
 ## BLE protocol
 
 - Device name: `HomeController`
@@ -95,9 +108,12 @@ when a relay actually changes, so flash wear is negligible.
 |---------------------------------|----------------------------------|------------------------------|
 | `01 <ch> <00/01>`               | Set relay channel 0–7            | `A2 <ch> <state>`            |
 | `02`                            | Request all states               | `A4 <s0..s7>`                |
+| `03 <mode>`                     | Set power-restore mode (0 = last state, 1 = all off) | `A6 <mode>` |
+| `04`                            | Request power-restore mode       | `A6 <mode>`                  |
 
 Response codes: `A2` set OK, `A4` states (also pushed automatically to any phone when it
-subscribes), `A5` channel changed by a manual switch, `E1` bad command, `E2` bad channel.
+subscribes), `A5` channel changed by a manual switch, `A6` restore mode, `E1` bad command,
+`E2` bad channel.
 
 ## Build & flash the ESP32
 
@@ -156,6 +172,7 @@ adb logcat -d | grep -E "BleRelayManager"     # view BLE logs from the app
 
 - The app auto-connects on launch; status shows **Connected / Connecting… / Offline**.
 - When connected: toggle the 8 tiles (Fan + Light 1–7), **Refresh**, **Disconnect**.
+- **⋮ → Settings** opens the settings screen with the **Power Restore** mode selector.
 - Bluetooth + location (Android ≤ 10) permissions are requested on first launch.
 - The fan channel currently uses GPIO2 (which also drives the onboard LED — the LED is a
   pin indicator and relays are low-trigger, so LED off = relay on). Move the fan back to
