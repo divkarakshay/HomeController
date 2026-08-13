@@ -15,8 +15,11 @@ living room) controlled over **Bluetooth Low Energy (BLE)** — no pairing, no r
 
 - BLE connections need **no pairing** on the phone — the app connects to the ESP32 and
   exchanges commands over GATT characteristics directly.
-- An app-layer PIN is still required once per connection so strangers in range cannot
-  flip your lights (range ~10–30 m).
+- **No app-layer PIN either**: any connected phone can control the relays. Multi-phone
+  safe — each phone that subscribes receives the current states automatically. (Anyone
+  within ~10–30 m with the app can control your lights; for a locked-down setup, re-add
+  the PIN auth.)
+- If the BLE link drops, the app silently auto-reconnects (up to 8 attempts, 2 s apart).
 
 ## Directories
 
@@ -68,6 +71,19 @@ are used, so a switch needs no extra parts.
 - At boot, relays are set to match the physical switches.
 - Switches and the app both control the relays — last one to change wins.
 
+## State persistence (power cut safe)
+
+Relay states are saved to the ESP32's NVS flash on every change (from the app or a
+switch) and restored at boot, so app-set states survive power cuts:
+
+| Light was ON via…        | Power returns →                                  |
+|--------------------------|--------------------------------------------------|
+| Toggle switch (physically ON) | ON (physical switch always wins)            |
+| App only (switch OFF)    | ON (restored from NVS flash memory)              |
+
+A physically-ON switch always overrides the saved state at boot. NVS writes happen only
+when a relay actually changes, so flash wear is negligible.
+
 ## BLE protocol
 
 - Device name: `HomeController`
@@ -77,37 +93,77 @@ are used, so a switch needs no extra parts.
 
 | Write packet                    | Meaning                          | Response                     |
 |---------------------------------|----------------------------------|------------------------------|
-| `FF <pinHi> <pinLo>`            | Authenticate (PIN from config.h) | `A1 <s0..s7>` auth OK + states, or `E4` wrong PIN |
 | `01 <ch> <00/01>`               | Set relay channel 0–7            | `A2 <ch> <state>`            |
 | `02`                            | Request all states               | `A4 <s0..s7>`                |
 
-Response codes: `A1` auth OK, `A2` set OK, `A4` states, `A5` channel changed by a manual
-switch, `E1` bad command, `E2` bad channel, `E3` not authenticated, `E4` wrong PIN.
+Response codes: `A2` set OK, `A4` states (also pushed automatically to any phone when it
+subscribes), `A5` channel changed by a manual switch, `E1` bad command, `E2` bad channel.
 
 ## Build & flash the ESP32
 
-1. Install PlatformIO: `python3 -m pip install platformio`
-2. `cd firmware && pio run` (first run downloads the toolchain)
-3. Connect the ESP32 via USB, then `pio run -t upload`
-4. Watch the log: `pio device monitor` — you should see `[BLE] advertising as HomeController`
-
-## Build & install the Android app
+1. Install PlatformIO (one time): `python3 -m pip install platformio`
+2. Connect the ESP32 via USB, then flash:
 
 ```sh
-cd android
-./gradlew :app:assembleDebug          # APK: app/build/outputs/apk/debug/app-debug.apk
-adb install app/build/outputs/apk/debug/app-debug.apk
+cd ~/MyWorkspace/HomeController/firmware
+python3 -m platformio run -t upload --upload-port /dev/cu.usbserial-0001
 ```
 
-- Enter the PIN (default `2468`, keep in sync with `firmware/include/config.h` BLE_PIN) and
-  tap **Scan & Connect**.
+(`/dev/cu.usbserial-0001` is the port for this Mac; find yours with `ls /dev/cu.*`.)
+
+3. Watch the log: `python3 -m platformio device monitor -p /dev/cu.usbserial-0001 -b 115200`
+   — you should see `[BLE] advertising as HomeController`
+
+**Extra firmware commands**
+
+```sh
+# Just compile (no upload) — catches errors fast
+python3 -m platformio run
+
+# Erase the whole flash (fixes boot loops / corrupted settings), then flash again
+python3 -m platformio run -t erase --upload-port /dev/cu.usbserial-0001
+python3 -m platformio run -t upload --upload-port /dev/cu.usbserial-0001
+```
+
+## Build, pack & sideload the Android app
+
+```sh
+cd ~/MyWorkspace/HomeController/android
+
+# 1. Compile + package the APK (app/build/outputs/apk/debug/app-debug.apk)
+./gradlew :app:assembleDebug
+
+# 2. Sideload it onto the phone (phone must have USB debugging enabled and be plugged in)
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Or everything in one go:
+./gradlew :app:assembleDebug && adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+The app auto-connects on launch. If it can't find the device, tap **Connect** to retry;
+the app also auto-reconnects silently after a dropped link.
+
+**Other useful phone commands**
+
+```sh
+adb devices                                   # check the phone is connected
+adb install -r app/build/outputs/apk/debug/app-debug.apk   # reinstall keeping app data
+adb uninstall com.homecontroller.app          # remove the app completely
+adb logcat -d | grep -E "BleRelayManager"     # view BLE logs from the app
+```
+
+## App usage
+
+- The app auto-connects on launch; status shows **Connected / Connecting… / Offline**.
+- When connected: toggle the 8 tiles (Fan + Light 1–7), **Refresh**, **Disconnect**.
 - Bluetooth + location (Android ≤ 10) permissions are requested on first launch.
-- The app auto-reconnects when the device comes back in range.
+- The fan channel currently uses GPIO2 (which also drives the onboard LED — the LED is a
+  pin indicator and relays are low-trigger, so LED off = relay on). Move the fan back to
+  GPIO4 if you want a clean line: change `RELAY_PINS[0]` in `firmware/include/config.h`.
 
 ## Security notes
 
-- No BLE encryption is enforced (this pairs nothing), so the PIN is the only barrier.
-  Anyone within BLE range who knows the PIN can control the relays.
-- Change `BLE_PIN` in `firmware/include/config.h` and in the app PIN field.
+- No BLE pairing and no app PIN: anyone within ~10–30 m using this app can control the
+  relays. Fine for a home living room; for a security-critical setup, add authentication.
 - Don't use this to control anything safety-critical (no 220 V relay switching without a
   proper enclosure, fused supply, and certified relay module).

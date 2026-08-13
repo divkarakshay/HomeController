@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.BluetoothLeScanner
@@ -42,6 +43,7 @@ class BleRelayManager(private val context: Context) {
     private var scanCallback: ScanCallback? = null
     private val handler = Handler(Looper.getMainLooper())
     private var connecting = false
+    private var waitingForNotifications = false
 
     val isEnabled: Boolean
         get() = adapter.isEnabled
@@ -82,15 +84,6 @@ class BleRelayManager(private val context: Context) {
             return
         }
         startScan()
-    }
-
-    @SuppressLint("MissingPermission")
-    fun reconnect() {
-        if (lastDevice != null) {
-            connectToDevice(lastDevice!!)
-        } else {
-            startScan()
-        }
     }
 
     @SuppressLint("MissingPermission")
@@ -150,8 +143,12 @@ class BleRelayManager(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun sendAuth(pin: Int) {
-        writeChar?.let { write(it, Protocol.authPacket(pin)) }
+    fun reconnect() {
+        if (lastDevice != null) {
+            connectToDevice(lastDevice!!)
+        } else {
+            startScan()
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -162,6 +159,35 @@ class BleRelayManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun refresh() {
         writeChar?.let { write(it, Protocol.getPacket) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun enableNotifications(g: BluetoothGatt, char: BluetoothGattCharacteristic) {
+        waitingForNotifications = true
+        runCatching { g.setCharacteristicNotification(char, true) }
+        val cccd = char.getDescriptor(Protocol.CCCD_UUID)
+        if (cccd == null) {
+            onNotificationsEnabled()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                return
+            } catch (e: NoSuchMethodError) {
+                // Fall through to the deprecated path (older 33-35 devices).
+            }
+        }
+        @Suppress("DEPRECATION")
+        cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        @Suppress("DEPRECATION")
+        g.writeDescriptor(cccd)
+    }
+
+    private fun onNotificationsEnabled() {
+        if (!waitingForNotifications) return
+        waitingForNotifications = false
+        listener?.onConnected()
     }
 
     @SuppressLint("MissingPermission")
@@ -188,6 +214,7 @@ class BleRelayManager(private val context: Context) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     connecting = false
+                    waitingForNotifications = false
                     Log.d(TAG, "Disconnected")
                     listener?.onDisconnected()
                 }
@@ -210,9 +237,23 @@ class BleRelayManager(private val context: Context) {
                 return
             }
             writeChar = wc
-            runCatching { g.setCharacteristicNotification(sc, true) }
             connecting = false
-            listener?.onConnected()
+            enableNotifications(g, sc)
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onDescriptorWrite(
+            g: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            if (descriptor.uuid == Protocol.CCCD_UUID) {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    onNotificationsEnabled()
+                } else {
+                    listener?.onError("Failed to enable notifications")
+                }
+            }
         }
 
         override fun onCharacteristicChanged(
@@ -235,10 +276,6 @@ class BleRelayManager(private val context: Context) {
     private fun handleStatus(data: ByteArray) {
         if (data.isEmpty()) return
         when (data[0]) {
-            Protocol.RSP_AUTH_OK -> {
-                Log.d(TAG, "Auth OK")
-                Protocol.parseStates(data)?.let { listener?.onStates(it) }
-            }
             Protocol.RSP_GET_ALL -> {
                 Log.d(TAG, "States received")
                 Protocol.parseStates(data)?.let { listener?.onStates(it) }
@@ -253,8 +290,7 @@ class BleRelayManager(private val context: Context) {
                     }
                 }
             }
-            Protocol.RSP_ERR_PIN -> listener?.onError("Wrong PIN")
-            Protocol.RSP_ERR_UNAUTH -> listener?.onError("Not authorized. Resend PIN.")
+            Protocol.RSP_SET_OK -> Log.d(TAG, "Set applied")
         }
     }
 

@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 
 #include "config.h"
 
@@ -8,30 +9,22 @@
 #define STATUS_CHAR_UUID "4fafc203-1fb5-459e-8fcc-c5c9c331914b"
 
 // ---- Protocol codes (kept in sync with the Android app) ----
+// No authentication: any connected phone can control the relays.
 // Command packets written to WRITE_CHAR:
-//   [0xFF, pinHi, pinLo]            -> authenticate
 //   [0x01, channel, 0x00/0x01]      -> set single relay
 //   [0x02]                          -> request all states
 // Response packets notified on STATUS_CHAR:
-//   [0xA1, s0..s7]                  -> auth OK + current states
 //   [0xA2, channel, state]          -> set command applied
-//   [0xA4, s0..s7]                  -> get-all response
+//   [0xA4, s0..s7]                  -> get-all response (also pushed on subscribe)
 //   [0xA5, channel, state]          -> manual switch changed the relay
-//   [0xE3]                          -> not authenticated
-//   [0xE4]                          -> wrong PIN
-static const uint8_t CMD_AUTH      = 0xFF;
 static const uint8_t CMD_SET       = 0x01;
 static const uint8_t CMD_GET       = 0x02;
-static const uint8_t RSP_AUTH_OK   = 0xA1;
 static const uint8_t RSP_SET_OK    = 0xA2;
 static const uint8_t RSP_GET_ALL   = 0xA4;
 static const uint8_t RSP_STATE_CHANGED = 0xA5;
 static const uint8_t RSP_ERR_CMD   = 0xE1;
 static const uint8_t RSP_ERR_CH    = 0xE2;
-static const uint8_t RSP_ERR_UAUTH = 0xE3;
-static const uint8_t RSP_ERR_PIN   = 0xE4;
 
-static bool g_authed = false;
 static uint8_t g_states[RELAY_COUNT] = {0};
 static BLECharacteristic* g_statusChar = nullptr;
 
@@ -39,11 +32,35 @@ static bool g_switchStable[RELAY_COUNT] = {false};
 static bool g_switchPending[RELAY_COUNT] = {false};
 static uint32_t g_switchSince[RELAY_COUNT] = {0};
 
+static Preferences g_prefs;
+static const char NVS_NAMESPACE[] = "relay";
+static const char NVS_KEY[] = "states";
+
 void setRelay(uint8_t ch, bool on) {
   if (ch >= RELAY_COUNT) return;
   g_states[ch] = on ? 1 : 0;
   bool level = RELAY_ACTIVE_HIGH ? on : !on;
   digitalWrite(RELAY_PINS[ch], level ? HIGH : LOW);
+}
+
+uint8_t statesBitmap() {
+  uint8_t b = 0;
+  for (uint8_t i = 0; i < RELAY_COUNT; i++) {
+    if (g_states[i]) b |= (1 << i);
+  }
+  return b;
+}
+
+void saveStatesToNvs() {
+  g_prefs.putUChar(NVS_KEY, statesBitmap());
+}
+
+void restoreStatesFromNvs() {
+  uint8_t saved = g_prefs.getUChar(NVS_KEY, 0);
+  for (uint8_t i = 0; i < RELAY_COUNT; i++) {
+    setRelay(i, saved & (1 << i));
+  }
+  Serial.printf("[NVS] restored states 0x%02X\n", saved);
 }
 
 void notify(const uint8_t* data, size_t len) {
@@ -77,6 +94,7 @@ void handleSwitches() {
     } else if (raw != g_switchStable[ch] && now - g_switchSince[ch] >= SWITCH_DEBOUNCE_MS) {
       g_switchStable[ch] = raw;
       setRelay(ch, raw);
+      saveStatesToNvs();
       uint8_t out[3] = {RSP_STATE_CHANGED, ch, g_states[ch]};
       notify(out, 3);
       Serial.printf("[SWITCH] ch%u -> %s\n", ch, raw ? "ON" : "OFF");
@@ -86,15 +104,25 @@ void handleSwitches() {
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
-    g_authed = false;
-    Serial.println("[BLE] connected, waiting for PIN");
+    Serial.printf("[BLE] client connected (%u)\n", server->getConnectedCount());
     NimBLEDevice::startAdvertising();
   }
 
   void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
-    g_authed = false;
-    Serial.println("[BLE] disconnected, advertising again");
+    Serial.printf("[BLE] client disconnected (%u left)\n", server->getConnectedCount());
     NimBLEDevice::startAdvertising();
+  }
+};
+
+class StatusCallbacks : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic* chr, ble_gap_conn_desc* desc, uint16_t subValue) override {
+    if (subValue & 0x0001) {
+      uint8_t out[1 + RELAY_COUNT];
+      size_t len;
+      respondStates(RSP_GET_ALL, out, len);
+      notify(out, len);
+      Serial.println("[BLE] pushed states to new subscriber");
+    }
   }
 };
 
@@ -109,23 +137,10 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
     size_t outLen = 0;
 
     switch (d[0]) {
-      case CMD_AUTH:
-        if (n != 3) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
-        if (((uint16_t)d[1] << 8) | d[2] == BLE_PIN) {
-          g_authed = true;
-          respondStates(RSP_AUTH_OK, out, outLen);
-          Serial.println("[BLE] auth OK");
-        } else {
-          out[0] = RSP_ERR_PIN;
-          outLen = 1;
-          Serial.println("[BLE] wrong PIN");
-        }
-        break;
-
       case CMD_SET:
-        if (!g_authed) { out[0] = RSP_ERR_UAUTH; outLen = 1; break; }
         if (n != 3 || d[1] >= RELAY_COUNT) { out[0] = RSP_ERR_CH; outLen = 1; break; }
         setRelay(d[1], d[2] != 0);
+        saveStatesToNvs();
         out[0] = RSP_SET_OK;
         out[1] = d[1];
         out[2] = g_states[d[1]];
@@ -133,7 +148,6 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
         break;
 
       case CMD_GET:
-        if (!g_authed) { out[0] = RSP_ERR_UAUTH; outLen = 1; break; }
         respondStates(RSP_GET_ALL, out, outLen);
         break;
 
@@ -152,17 +166,24 @@ void setup() {
   delay(300);
   Serial.println("[BLE] HomeController starting");
 
+  g_prefs.begin(NVS_NAMESPACE, false);
+
   for (uint8_t i = 0; i < RELAY_COUNT; i++) {
     pinMode(RELAY_PINS[i], OUTPUT);
     setRelay(i, false);
   }
 
+  // Restore the last saved (app or switch) states from flash memory.
+  restoreStatesFromNvs();
+
+  // A switch that is physically ON always wins over the saved state.
   for (uint8_t i = 0; i < RELAY_COUNT; i++) {
     pinMode(SWITCH_PINS[i], INPUT_PULLUP);
     g_switchStable[i] = readSwitch(i);
     g_switchPending[i] = g_switchStable[i];
     if (g_switchStable[i]) setRelay(i, true);
   }
+  saveStatesToNvs();
   Serial.println("[SWITCH] manual switches initialized");
 
   NimBLEDevice::init(BLE_DEVICE_NAME);
@@ -179,6 +200,7 @@ void setup() {
 
   g_statusChar =
       service->createCharacteristic(STATUS_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  g_statusChar->setCallbacks(new StatusCallbacks());
 
   service->start();
 
