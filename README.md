@@ -45,6 +45,29 @@ living room) controlled over **Bluetooth Low Energy (BLE)** — no pairing, no r
 - Fan and lights run on relay contacts only (on/off). Fan speed control would need a
   triac/dimmer module instead of a relay.
 
+## Manual toggle switches
+
+Each channel also has a physical SPST toggle switch (works even without the phone).
+Wire one terminal of each switch to GND, the other to the GPIO below. Internal pull-ups
+are used, so a switch needs no extra parts.
+
+| Channel | Switch GPIO |
+|---------|-------------|
+| CH0 Fan     | GPIO13 |
+| CH1 Light 1 | GPIO14 |
+| CH2 Light 2 | GPIO15 |
+| CH3 Light 3 | GPIO23 |
+| CH4 Light 4 | GPIO25 |
+| CH5 Light 5 | GPIO26 |
+| CH6 Light 6 | GPIO27 |
+| CH7 Light 7 | GPIO32 |
+
+- Switch closed (to GND) = relay ON, open = OFF. Debounced in firmware (40 ms).
+- Flipping a switch updates its relay **and** notifies the phone app, so the UI stays
+  in sync (response code `A5`).
+- At boot, relays are set to match the physical switches.
+- Switches and the app both control the relays — last one to change wins.
+
 ## BLE protocol
 
 - Device name: `HomeController`
@@ -58,8 +81,8 @@ living room) controlled over **Bluetooth Low Energy (BLE)** — no pairing, no r
 | `01 <ch> <00/01>`               | Set relay channel 0–7            | `A2 <ch> <state>`            |
 | `02`                            | Request all states               | `A4 <s0..s7>`                |
 
-Response codes: `A1` auth OK, `A2` set OK, `A4` states, `E1` bad command, `E2` bad channel,
-`E3` not authenticated, `E4` wrong PIN.
+Response codes: `A1` auth OK, `A2` set OK, `A4` states, `A5` channel changed by a manual
+switch, `E1` bad command, `E2` bad channel, `E3` not authenticated, `E4` wrong PIN.
 
 ## Build & flash the ESP32
 

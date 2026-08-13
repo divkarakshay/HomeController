@@ -26,6 +26,7 @@ class BleRelayManager(private val context: Context) {
         fun onConnected()
         fun onDisconnected()
         fun onStates(states: List<Boolean>)
+        fun onStateChanged(channel: Int, on: Boolean) {}
         fun onError(message: String)
     }
 
@@ -241,6 +242,16 @@ class BleRelayManager(private val context: Context) {
             Protocol.RSP_GET_ALL -> {
                 Log.d(TAG, "States received")
                 Protocol.parseStates(data)?.let { listener?.onStates(it) }
+            }
+            Protocol.RSP_STATE_CHANGED -> {
+                Log.d(TAG, "State changed")
+                if (data.size == 3) {
+                    val channel = data[1].toInt()
+                    val on = data[2] == 1.toByte()
+                    if (channel in 0 until Protocol.RELAY_COUNT) {
+                        listener?.onStateChanged(channel, on)
+                    }
+                }
             }
             Protocol.RSP_ERR_PIN -> listener?.onError("Wrong PIN")
             Protocol.RSP_ERR_UNAUTH -> listener?.onError("Not authorized. Resend PIN.")

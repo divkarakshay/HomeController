@@ -16,6 +16,7 @@
 //   [0xA1, s0..s7]                  -> auth OK + current states
 //   [0xA2, channel, state]          -> set command applied
 //   [0xA4, s0..s7]                  -> get-all response
+//   [0xA5, channel, state]          -> manual switch changed the relay
 //   [0xE3]                          -> not authenticated
 //   [0xE4]                          -> wrong PIN
 static const uint8_t CMD_AUTH      = 0xFF;
@@ -24,6 +25,7 @@ static const uint8_t CMD_GET       = 0x02;
 static const uint8_t RSP_AUTH_OK   = 0xA1;
 static const uint8_t RSP_SET_OK    = 0xA2;
 static const uint8_t RSP_GET_ALL   = 0xA4;
+static const uint8_t RSP_STATE_CHANGED = 0xA5;
 static const uint8_t RSP_ERR_CMD   = 0xE1;
 static const uint8_t RSP_ERR_CH    = 0xE2;
 static const uint8_t RSP_ERR_UAUTH = 0xE3;
@@ -32,6 +34,10 @@ static const uint8_t RSP_ERR_PIN   = 0xE4;
 static bool g_authed = false;
 static uint8_t g_states[RELAY_COUNT] = {0};
 static BLECharacteristic* g_statusChar = nullptr;
+
+static bool g_switchStable[RELAY_COUNT] = {false};
+static bool g_switchPending[RELAY_COUNT] = {false};
+static uint32_t g_switchSince[RELAY_COUNT] = {0};
 
 void setRelay(uint8_t ch, bool on) {
   if (ch >= RELAY_COUNT) return;
@@ -51,6 +57,31 @@ void respondStates(uint8_t code, uint8_t* out, size_t& len) {
   out[0] = code;
   memcpy(out + 1, g_states, RELAY_COUNT);
   len = 1 + RELAY_COUNT;
+}
+
+bool readSwitch(uint8_t ch) {
+  return digitalRead(SWITCH_PINS[ch]) == LOW;
+}
+
+void handleSwitches() {
+  static uint32_t lastPoll = 0;
+  uint32_t now = millis();
+  if (now - lastPoll < 10) return;
+  lastPoll = now;
+
+  for (uint8_t ch = 0; ch < RELAY_COUNT; ch++) {
+    bool raw = readSwitch(ch);
+    if (raw != g_switchPending[ch]) {
+      g_switchPending[ch] = raw;
+      g_switchSince[ch] = now;
+    } else if (raw != g_switchStable[ch] && now - g_switchSince[ch] >= SWITCH_DEBOUNCE_MS) {
+      g_switchStable[ch] = raw;
+      setRelay(ch, raw);
+      uint8_t out[3] = {RSP_STATE_CHANGED, ch, g_states[ch]};
+      notify(out, 3);
+      Serial.printf("[SWITCH] ch%u -> %s\n", ch, raw ? "ON" : "OFF");
+    }
+  }
 }
 
 class ServerCallbacks : public NimBLEServerCallbacks {
@@ -126,6 +157,14 @@ void setup() {
     setRelay(i, false);
   }
 
+  for (uint8_t i = 0; i < RELAY_COUNT; i++) {
+    pinMode(SWITCH_PINS[i], INPUT_PULLUP);
+    g_switchStable[i] = readSwitch(i);
+    g_switchPending[i] = g_switchStable[i];
+    if (g_switchStable[i]) setRelay(i, true);
+  }
+  Serial.println("[SWITCH] manual switches initialized");
+
   NimBLEDevice::init(BLE_DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P7);
 
@@ -153,5 +192,6 @@ void setup() {
 }
 
 void loop() {
-  delay(100);
+  handleSwitches();
+  delay(10);
 }

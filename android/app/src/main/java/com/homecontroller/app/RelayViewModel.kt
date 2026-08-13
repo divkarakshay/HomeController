@@ -73,6 +73,14 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update { it.copy(states = states) }
             }
 
+            override fun onStateChanged(channel: Int, on: Boolean) {
+                _state.update { s ->
+                    val list = s.states.toMutableList()
+                    list[channel] = on
+                    s.copy(states = list)
+                }
+            }
+
             override fun onError(message: String) {
                 _state.update {
                     it.copy(connecting = false, error = message)

@@ -17,6 +17,7 @@ object Protocol {
     const val RSP_AUTH_OK: Byte = 0xA1.toByte()
     const val RSP_SET_OK: Byte = 0xA2.toByte()
     const val RSP_GET_ALL: Byte = 0xA4.toByte()
+    const val RSP_STATE_CHANGED: Byte = 0xA5.toByte()
     const val RSP_ERR_UNAUTH: Byte = 0xE3.toByte()
     const val RSP_ERR_PIN: Byte = 0xE4.toByte()
 
