@@ -278,7 +278,8 @@ void fanStartCycling(uint8_t target) {
     return;
   }
   if (target == g_fanLevel) {
-    // Already there: just make sure the fan is powered on.
+    // Already there: just make sure the fan is powered on. No cycling - the
+    // fan powers up at its own remembered speed, so a plain ON is enough.
     if (!g_states[RELAY_CH_FAN]) fanSetRelay(true);
     fanNotifyBusy(false);
     fanNotifySpeed();
@@ -316,8 +317,10 @@ void fanTick() {
 
   switch (g_fanPhase) {
     case FAN_PHASE_BOOT:
-      // Power was just applied; wait for the fan to reach its memory speed
-      // before the first OFF pulse.
+      // Power was just applied. A standstill fan needs to spin up first: the
+      // ~1 s OFF pulse only registers once the motor has momentum (the inertia
+      // keeps the fan's controller alive through the pulse). The boot settle
+      // covers the fade-in to the fan's remembered speed before the first pulse.
       if (elapsed < FAN_BOOT_SETTLE_MS) break;
       g_fanPhase = FAN_PHASE_OFF;
       g_fanPhaseSince = now;

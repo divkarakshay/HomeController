@@ -131,10 +131,17 @@ automates exactly that pattern with millisecond precision in the firmware:
 | Levels | 1–5 + Boost (6 = max) |
 | Relay OFF pulse | 1.0 s per step |
 | Relay ON between steps | 2.5 s (the fan must register each level) |
-| Power-on warm-up | 3.0 s before the first pulse when the fan was OFF |
+| Power-on warm-up | 8.0 s before the first pulse when the fan was OFF |
 
+- **The fan remembers its speed across power cuts** — turning it on is just a
+  relay ON; the fan resumes at its own remembered speed and no cycling happens
+  until you pick a new speed on the dial.
 - The dial shows the fan's indicator disk — 1–5 green LEDs lit for the speed, all 6 amber
   for Boost — and snaps with haptic feedback. The hub is the fan's on/off button.
+- Starting from a dead stop, the BLDC needs a few seconds to spin up before the
+  OFF–ON pulses register (the 1 s pulse works mid-spin because the motor's
+  momentum keeps the fan's controller alive) — the 8 s warm-up covers that, so
+  speed changes initiated from standstill take a bit longer.
 - While cycling, the dial shows an orange progress ring, the status line reads
   "Setting Speed N…" and the dial locks; new requests made mid-cycle are queued
   and applied when the current cycle finishes.
@@ -142,8 +149,12 @@ automates exactly that pattern with millisecond precision in the firmware:
   the dial is correct after a power cut.
 - Anything that takes direct control of the fan relay aborts the cycle: toggling the
   switch in the app, flipping the physical wall switch, or the off-timer firing.
-- Limitation: if the fan's speed is changed with the physical switch trick, the
-  controller can't detect it — the dial assumes the last level it set.
+- Limitation: the fan's own IR remote (and the physical-switch trick) can change
+  the speed without the controller knowing, and a standstill fan with the relay
+  ON is invisible to us too (e.g. the remote's own off button). The dial assumes
+  the last level the app set, so it can drift out of sync — if the speed was
+  changed by hand since the last dial commit, the next cycle may land on the
+  wrong speed.
 - Add a triac/dimmer on CH0 instead of a relay to get instant, silent speed changes
   (then drop the cycling timing constants in `firmware/include/config.h`).
 
