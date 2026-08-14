@@ -15,6 +15,7 @@ object RelayHolder {
     data class DeviceState(
         val bluetoothOn: Boolean = true,
         val connected: Boolean = false,
+        val connecting: Boolean = false,
         val states: List<Boolean> = List(Protocol.RELAY_COUNT) { false },
         val restoreMode: Int = Protocol.MODE_RESTORE_LAST,
         val timers: Map<Int, Protocol.TimerInfo> = emptyMap(),
@@ -60,13 +61,14 @@ object RelayHolder {
             listener = object : BleRelayManager.Listener {
                 override fun onConnected() {
                     Log.d(TAG, "Holder connected")
-                    _state.update { it.copy(connected = true, bluetoothOn = true) }
+                    _state.update { it.copy(connected = true, connecting = false, bluetoothOn = true) }
                     refresh()
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        requestRestoreMode()
+                                                requestRestoreMode()
                         syncEpoch()
                         requestFanSpeed()
                         requestRules()
+                        requestTimers()
                         requestTime()
                     }, 150)
                     refreshWidgets()
@@ -74,7 +76,7 @@ object RelayHolder {
                 }
 
                 override fun onDisconnected() {
-                    _state.update { it.copy(connected = false) }
+                    _state.update { it.copy(connected = false, connecting = false) }
                     refreshWidgets()
                     events?.onDisconnected()
                 }
@@ -104,6 +106,11 @@ object RelayHolder {
                         if (timer.active) s.copy(timers = s.timers + (timer.channel to timer))
                         else s.copy(timers = s.timers - timer.channel)
                     }
+                    refreshWidgets()
+                }
+
+                override fun onTimers(timers: Map<Int, Protocol.TimerInfo>) {
+                    _state.update { it.copy(timers = timers) }
                     refreshWidgets()
                 }
 
@@ -155,6 +162,7 @@ object RelayHolder {
 
     fun connect() {
         manager?.connect()
+        _state.update { it.copy(connecting = true) }
     }
 
     fun disconnect() {
@@ -196,6 +204,14 @@ object RelayHolder {
 
     fun setRule(rule: Protocol.TimeRule) {
         manager?.setRule(rule)
+    }
+
+    fun deleteRule(rule: Protocol.TimeRule) {
+        manager?.deleteRule(rule)
+    }
+
+    fun requestTimers() {
+        manager?.requestTimers()
     }
 
     fun requestTime() {

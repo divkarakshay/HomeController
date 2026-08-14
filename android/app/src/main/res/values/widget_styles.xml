@@ -2,10 +2,16 @@
 <resources>
     <style name="WidgetRow">
         <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">26dp</item>
+        <item name="android:layout_height">30dp</item>
         <item name="android:orientation">horizontal</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:background">@drawable/widget_row</item>
+    </style>
+    <style name="WidgetIcon">
+        <item name="android:layout_width">17dp</item>
+        <item name="android:layout_height">17dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
+        <item name="android:importantForAccessibility">no</item>
     </style>
     <style name="WidgetName">
         <item name="android:layout_width">0dp</item>
@@ -21,5 +27,12 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">bold</item>
+    </style>
+    <style name="WidgetTimer">
+        <item name="android:layout_width">20dp</item>
+        <item name="android:layout_height">20dp</item>
+        <item name="android:layout_marginStart">10dp</item>
+        <item name="android:padding">2dp</item>
+        <item name="android:importantForAccessibility">no</item>
     </style>
 </resources>

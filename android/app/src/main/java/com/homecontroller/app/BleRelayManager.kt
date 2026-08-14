@@ -31,6 +31,7 @@ class BleRelayManager(private val context: Context) {
         fun onStateChanged(channel: Int, on: Boolean) {}
         fun onRestoreMode(mode: Int) {}
         fun onTimer(timer: Protocol.TimerInfo) {}
+        fun onTimers(timers: Map<Int, Protocol.TimerInfo>) {}
         fun onFanSpeed(level: Int) {}
         fun onFanBusy(busy: Boolean) {}
         fun onRules(rules: List<Protocol.TimeRule>) {}
@@ -54,6 +55,7 @@ class BleRelayManager(private val context: Context) {
     private var scanCallback: ScanCallback? = null
     private val handler = Handler(Looper.getMainLooper())
     private var connecting = false
+    private var connected = false
     private var waitingForNotifications = false
 
     val isEnabled: Boolean
@@ -80,6 +82,8 @@ class BleRelayManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun connect(target: BluetoothDevice? = null) {
+        if (isConnected) return
+        if (connecting) return
         if (!adapter.isEnabled) {
             listener?.onError("Bluetooth is off. Enable it in Settings.")
             return
@@ -93,12 +97,15 @@ class BleRelayManager(private val context: Context) {
             connectToDevice(target)
             return
         }
-        if (lastDevice != null && !connecting) {
+        if (lastDevice != null) {
             connectToDevice(lastDevice!!)
             return
         }
         startScan()
     }
+
+    val isConnected: Boolean
+        get() = gatt != null && connected
 
     @SuppressLint("MissingPermission")
     private fun startScan() {
@@ -132,14 +139,17 @@ class BleRelayManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     private fun connectToDevice(device: BluetoothDevice) {
         Log.d(TAG, "Connecting to ${device.address}")
-        gatt?.disconnect()
-        gatt?.close()
+        connecting = true
+        val old = gatt
         gatt = device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        old?.disconnect()
+        old?.close()
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
         connecting = false
+        connected = false
         handler.removeCallbacksAndMessages(null)
         stopScanSafe()
         gatt?.disconnect()
@@ -218,6 +228,14 @@ class BleRelayManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun setRule(rule: Protocol.TimeRule) {
         writeChar?.let { write(it, Protocol.setRulePacket(rule)) }
+    }
+
+    fun deleteRule(rule: Protocol.TimeRule) {
+        writeChar?.let { write(it, Protocol.deleteRulePacket(rule)) }
+    }
+
+    fun requestTimers() {
+        writeChar?.let { write(it, Protocol.getTimersPacket) }
     }
 
     @SuppressLint("MissingPermission")
@@ -310,11 +328,15 @@ class BleRelayManager(private val context: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    if (g !== gatt) return
                     Log.d(TAG, "Connected")
+                    connected = true
                     runCatching { g.discoverServices() }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    if (g !== gatt && gatt != null) return
                     connecting = false
+                    connected = false
                     waitingForNotifications = false
                     Log.d(TAG, "Disconnected")
                     listener?.onDisconnected()
@@ -340,6 +362,10 @@ class BleRelayManager(private val context: Context) {
             writeChar = wc
             connecting = false
             enableNotifications(g, sc)
+            // The rules list reply is 49 bytes; the default 23-byte MTU caps a
+            // notification at 20 bytes and fragments the payload. Negotiate a
+            // larger MTU so replies arrive whole.
+            runCatching { g.requestMtu(517) }
         }
 
         @Deprecated("Deprecated in Java")
@@ -414,6 +440,10 @@ class BleRelayManager(private val context: Context) {
             Protocol.RSP_TIME -> {
                 Log.d(TAG, "Time received")
                 Protocol.parseTime(data)?.let { (epoch, synced) -> listener?.onTime(epoch, synced) }
+            }
+            Protocol.RSP_TIMERS -> {
+                Log.d(TAG, "Timers received")
+                Protocol.parseTimers(data)?.let { listener?.onTimers(it) }
             }
             Protocol.RSP_OTA_BEGIN -> {
                 Log.d(TAG, "OTA upload started")

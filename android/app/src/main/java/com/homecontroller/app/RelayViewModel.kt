@@ -175,6 +175,14 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         RelayHolder.setRule(rule)
     }
 
+    fun deleteRule(rule: Protocol.TimeRule) {
+        if (!_state.value.connected) {
+            _state.update { it.copy(error = "Connect to ${Protocol.DEVICE_NAME} to delete rules") }
+            return
+        }
+        RelayHolder.deleteRule(rule)
+    }
+
     fun refreshRules() {
         RelayHolder.requestRules()
     }

@@ -43,6 +43,8 @@
 //   [0xAF, 0/1]                     -> fan speed cycling busy state changed
 //   [0xB0, 8 x 6-byte rules]        -> time rules list (also pushed after a rule set)
 //   [0xB2, epoch 4B LE, synced]     -> controller clock
+//   [0x0F]                          -> request all off-timers
+//   [0x10, idx]                     -> delete the time rule at the given index
 static const uint8_t CMD_SET       = 0x01;
 static const uint8_t CMD_GET       = 0x02;
 static const uint8_t CMD_SET_MODE  = 0x03;
@@ -68,6 +70,7 @@ static const uint8_t RSP_OTA_ACK   = 0xAD;
 static const uint8_t RSP_FAN_SPEED = 0xAE;
 static const uint8_t RSP_FAN_BUSY  = 0xAF;
 static const uint8_t RSP_RULES     = 0xB0;
+static const uint8_t RSP_TIMERS    = 0xB3;
 static const uint8_t RSP_TIME      = 0xB2;
 static const uint8_t RSP_ERR_CMD   = 0xE1;
 static const uint8_t RSP_ERR_CH    = 0xE2;
@@ -75,6 +78,8 @@ static const uint8_t RSP_ERR_CH    = 0xE2;
 static const uint8_t CMD_GET_RULES = 0x0C;
 static const uint8_t CMD_SET_RULE  = 0x0D;
 static const uint8_t CMD_GET_TIME  = 0x0E;
+static const uint8_t CMD_GET_TIMERS = 0x0F;
+static const uint8_t CMD_DEL_RULE  = 0x10;
 
 static const uint8_t RESTORE_LAST   = 0;
 static const uint8_t RESTORE_ALL_OFF = 1;
@@ -119,6 +124,7 @@ uint32_t nowSec() {
 // bit0=Mon .. bit6=Sun; 0 means every day. Rules only fire while the clock
 // is synced.
 #define RULE_COUNT 8
+#define RULE_ACTION_OFF 0
 
 typedef struct {
   uint8_t enabled;
@@ -615,6 +621,42 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
           out[4] = (t >> 24) & 0xFF;
           out[5] = g_timeSynced ? 1 : 0;
           outLen = 6;
+        }
+        break;
+
+      case CMD_GET_TIMERS:
+        if (n != 1) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
+        {
+          out[0] = RSP_TIMERS;
+          for (uint8_t ch = 0; ch < RELAY_COUNT; ch++) {
+            uint16_t m = 0;
+            if (g_timerEnd[ch] != 0) {
+              uint32_t remMs = (int32_t)(g_timerEnd[ch] - millis()) > 0
+                ? (g_timerEnd[ch] - millis()) : 0;
+              uint32_t remMin = remMs / 60000UL;
+              m = remMin > 65535 ? 65535 : (uint16_t)remMin;
+              if (m == 0) m = 1;  // still pending, sub-minute
+            }
+            out[1 + 2 * ch] = (uint8_t)(m >> 8);
+            out[2 + 2 * ch] = (uint8_t)(m & 0xFF);
+          }
+          outLen = 1 + 2 * RELAY_COUNT;
+        }
+        break;
+
+      case CMD_DEL_RULE:
+        if (n != 2 || d[1] >= RULE_COUNT) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
+        {
+          TimeRule* r = &g_rules[d[1]];
+          r->enabled = 0;
+          r->channel = 0;
+          r->action = RULE_ACTION_OFF;
+          r->hour = 0;
+          r->minute = 0;
+          r->days = 0;
+          saveRulesToNvs();
+          respondRules(out, outLen);
+          Serial.printf("[RULE] rule%u deleted\n", d[1]);
         }
         break;
 

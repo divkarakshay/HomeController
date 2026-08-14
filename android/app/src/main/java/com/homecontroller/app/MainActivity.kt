@@ -47,6 +47,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Refresh
@@ -257,6 +259,7 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                 timeSynced = state.timeSynced,
                 onModeChange = viewModel::setRestoreMode,
                 onSetRule = viewModel::setRule,
+                onDeleteRule = viewModel::deleteRule,
                 onSyncClock = viewModel::syncClock,
                 onPickFirmware = viewModel::uploadFirmware,
                 onBack = { showSettings = false }
@@ -374,6 +377,7 @@ private fun SettingsScreen(
     timeSynced: Boolean,
     onModeChange: (Int) -> Unit,
     onSetRule: (Protocol.TimeRule) -> Unit,
+    onDeleteRule: (Protocol.TimeRule) -> Unit,
     onSyncClock: () -> Unit,
     onPickFirmware: (android.net.Uri) -> Unit,
     onBack: () -> Unit
@@ -418,6 +422,7 @@ private fun SettingsScreen(
             enabled = connected,
             channelStore = channelStore,
             onSetRule = onSetRule,
+            onDeleteRule = onDeleteRule,
             onSyncClock = onSyncClock
         )
         PowerRestoreCard(
@@ -1511,11 +1516,13 @@ private fun TimeRulesCard(
     enabled: Boolean,
     channelStore: ChannelStore,
     onSetRule: (Protocol.TimeRule) -> Unit,
+    onDeleteRule: (Protocol.TimeRule) -> Unit,
     onSyncClock: () -> Unit
 ) {
     val colors = LocalAppColors.current
     val used = rules.filter { !it.isDefault() }
     var showAdd by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Protocol.TimeRule?>(null) }
 
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -1599,7 +1606,9 @@ private fun TimeRulesCard(
                         rule = rule,
                         enabled = enabled,
                         channelStore = channelStore,
-                        onSetRule = onSetRule
+                        onSetRule = onSetRule,
+                        onDeleteRule = onDeleteRule,
+                        onEdit = { editing = rule }
                     )
                 }
             }
@@ -1608,6 +1617,7 @@ private fun TimeRulesCard(
     if (showAdd) {
         AddRuleDialog(
             channelStore = channelStore,
+            initial = null,
             onSave = { draft ->
                 val slot = rules.indexOfFirst { it.isDefault() }
                 if (slot in 0 until Protocol.RULE_COUNT) {
@@ -1616,6 +1626,17 @@ private fun TimeRulesCard(
                 showAdd = false
             },
             onDismiss = { showAdd = false }
+        )
+    }
+    editing?.let { rule ->
+        AddRuleDialog(
+            channelStore = channelStore,
+            initial = rule,
+            onSave = { draft ->
+                onSetRule(draft.copy(index = rule.index, enabled = rule.enabled))
+                editing = null
+            },
+            onDismiss = { editing = null }
         )
     }
 }
@@ -1637,7 +1658,9 @@ private fun RuleRow(
     rule: Protocol.TimeRule,
     enabled: Boolean,
     channelStore: ChannelStore,
-    onSetRule: (Protocol.TimeRule) -> Unit
+    onSetRule: (Protocol.TimeRule) -> Unit,
+    onDeleteRule: (Protocol.TimeRule) -> Unit,
+    onEdit: () -> Unit
 ) {
     val colors = LocalAppColors.current
     val on = rule.action == Protocol.RULE_ACTION_ON
@@ -1687,15 +1710,24 @@ private fun RuleRow(
             )
         )
         IconButton(
-            onClick = {
-                onSetRule(rule.copy(enabled = false, channel = 0, action = Protocol.RULE_ACTION_OFF,
-                    hour = 0, minute = 0, days = 0))
-            },
+            onClick = onEdit,
             enabled = enabled,
-            modifier = Modifier.size(30.dp)
+            modifier = Modifier.size(28.dp)
         ) {
             Icon(
-                imageVector = Icons.Filled.Close,
+                imageVector = Icons.Filled.Edit,
+                contentDescription = "Edit rule",
+                tint = colors.textSecondary,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        IconButton(
+            onClick = { onDeleteRule(rule) },
+            enabled = enabled,
+            modifier = Modifier.size(28.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
                 contentDescription = "Delete rule",
                 tint = colors.textTertiary,
                 modifier = Modifier.size(14.dp)
@@ -1732,15 +1764,16 @@ private fun Chip(
 @Composable
 private fun AddRuleDialog(
     channelStore: ChannelStore,
+    initial: Protocol.TimeRule?,
     onSave: (Protocol.TimeRule) -> Unit,
     onDismiss: () -> Unit
 ) {
     val colors = LocalAppColors.current
-    var channel by remember { mutableStateOf(1) }
-    var action by remember { mutableStateOf(Protocol.RULE_ACTION_OFF) }
-    var hourStr by remember { mutableStateOf("09") }
-    var minStr by remember { mutableStateOf("00") }
-    var days by remember { mutableStateOf(0) }
+    var channel by remember(initial) { mutableStateOf(initial?.channel ?: 1) }
+    var action by remember(initial) { mutableStateOf(initial?.action ?: Protocol.RULE_ACTION_OFF) }
+    var hourStr by remember(initial) { mutableStateOf("%02d".format(initial?.hour ?: 9)) }
+    var minStr by remember(initial) { mutableStateOf("%02d".format(initial?.minute ?: 0)) }
+    var days by remember(initial) { mutableStateOf(initial?.days ?: 0) }
     val hour = hourStr.toIntOrNull()
     val minute = minStr.toIntOrNull()
     val valid = hour != null && hour in 0..23 && minute != null && minute in 0..59
@@ -1748,7 +1781,7 @@ private fun AddRuleDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = colors.menuBackground,
-        title = { Text("New rule", color = colors.textPrimary) },
+        title = { Text(if (initial == null) "New rule" else "Edit rule", color = colors.textPrimary) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(

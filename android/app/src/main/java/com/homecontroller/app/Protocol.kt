@@ -25,6 +25,8 @@ object Protocol {
     const val CMD_GET_RULES: Byte = 0x0C
     const val CMD_SET_RULE: Byte = 0x0D
     const val CMD_GET_TIME: Byte = 0x0E
+    const val CMD_GET_TIMERS: Byte = 0x0F
+    const val CMD_DEL_RULE: Byte = 0x10
 
     const val RSP_SET_OK: Byte = 0xA2.toByte()
     const val RSP_GET_ALL: Byte = 0xA4.toByte()
@@ -40,6 +42,7 @@ object Protocol {
     const val RSP_FAN_BUSY: Byte = 0xAF.toByte()
     const val RSP_RULES: Byte = 0xB0.toByte()
     const val RSP_TIME: Byte = 0xB2.toByte()
+    const val RSP_TIMERS: Byte = 0xB3.toByte()
 
     const val FAN_LEVELS = 6
     const val FAN_LEVEL_BOOST = 6
@@ -173,6 +176,9 @@ object Protocol {
             rule.days.toByte()
         )
 
+    fun deleteRulePacket(rule: TimeRule): ByteArray =
+        byteArrayOf(CMD_DEL_RULE, rule.index.toByte())
+
     fun parseRules(data: ByteArray): List<TimeRule>? {
         if (data.size != 1 + RULE_COUNT * 6) return null
         return (0 until RULE_COUNT).map { i ->
@@ -198,5 +204,18 @@ object Protocol {
             ((data[3].toLong() and 0xFF) shl 16) or
             ((data[4].toLong() and 0xFF) shl 24)
         return epoch to (data[5] == 1.toByte())
+    }
+
+    val getTimersPacket: ByteArray = byteArrayOf(CMD_GET_TIMERS)
+
+    fun parseTimers(data: ByteArray): Map<Int, TimerInfo>? {
+        if (data.size != 1 + RELAY_COUNT * 2) return null
+        return buildMap {
+            (0 until RELAY_COUNT).forEach { ch ->
+                val minutes = ((data[1 + 2 * ch].toInt() and 0xFF) shl 8) or
+                    (data[2 + 2 * ch].toInt() and 0xFF)
+                if (minutes > 0) put(ch, TimerInfo(ch, minutes, true))
+            }
+        }
     }
 }
