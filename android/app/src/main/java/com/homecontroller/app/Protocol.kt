@@ -15,11 +15,29 @@ object Protocol {
     const val CMD_GET: Byte = 0x02
     const val CMD_SET_MODE: Byte = 0x03
     const val CMD_GET_MODE: Byte = 0x04
+    const val CMD_SET_TIMER: Byte = 0x05
+    const val CMD_SET_EPOCH: Byte = 0x06
+    const val CMD_OTA_BEGIN: Byte = 0x07
+    const val CMD_OTA_WRITE: Byte = 0x08
+    const val CMD_OTA_END: Byte = 0x09
+    const val CMD_SET_FAN_SPEED: Byte = 0x0A
+    const val CMD_GET_FAN_SPEED: Byte = 0x0B
 
     const val RSP_SET_OK: Byte = 0xA2.toByte()
     const val RSP_GET_ALL: Byte = 0xA4.toByte()
     const val RSP_STATE_CHANGED: Byte = 0xA5.toByte()
     const val RSP_MODE: Byte = 0xA6.toByte()
+    const val RSP_TIMER_OK: Byte = 0xA7.toByte()
+    const val RSP_OTA_BEGIN: Byte = 0xA8.toByte()
+    const val RSP_OTA_ACK: Byte = 0xAD.toByte()
+    const val RSP_OTA_RESEND: Byte = 0xAC.toByte()
+    const val RSP_OTA_END: Byte = 0xAA.toByte()
+    const val RSP_OTA_CRC_ERR: Byte = 0xAB.toByte()
+    const val RSP_FAN_SPEED: Byte = 0xAE.toByte()
+    const val RSP_FAN_BUSY: Byte = 0xAF.toByte()
+
+    const val FAN_LEVELS = 6
+    const val FAN_LEVEL_BOOST = 6
 
     const val MODE_RESTORE_LAST = 0
     const val MODE_ALL_OFF = 1
@@ -41,8 +59,81 @@ object Protocol {
 
     val getModePacket: ByteArray = byteArrayOf(CMD_GET_MODE)
 
+    fun timerPacket(channel: Int, minutes: Int, active: Boolean): ByteArray =
+        byteArrayOf(
+            CMD_SET_TIMER,
+            channel.toByte(),
+            ((minutes shr 8) and 0xFF).toByte(),
+            (minutes and 0xFF).toByte(),
+            if (active) 1 else 0
+        )
+
+    fun epochPacket(epochSeconds: Long): ByteArray =
+        byteArrayOf(
+            CMD_SET_EPOCH,
+            (epochSeconds and 0xFF).toByte(),
+            ((epochSeconds shr 8) and 0xFF).toByte(),
+            ((epochSeconds shr 16) and 0xFF).toByte(),
+            ((epochSeconds shr 24) and 0xFF).toByte()
+        )
+
+    data class TimerInfo(val channel: Int, val minutes: Int, val active: Boolean)
+
+    fun parseTimer(data: ByteArray): TimerInfo? {
+        if (data.size != 5) return null
+        val ch = data[1].toInt()
+        if (ch !in 0 until RELAY_COUNT) return null
+        val minutes = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
+        return TimerInfo(ch, minutes, data[4] == 1.toByte())
+    }
+
+    const val OTA_CHUNK_SIZE = 16
+    const val OTA_MAX_SIZE = 0x1C0000
+
+    fun otaBeginPacket(size: Int): ByteArray =
+        byteArrayOf(
+            CMD_OTA_BEGIN,
+            (size and 0xFF).toByte(),
+            ((size shr 8) and 0xFF).toByte(),
+            ((size shr 16) and 0xFF).toByte(),
+            ((size shr 24) and 0xFF).toByte()
+        )
+
+    fun otaWritePacket(seq: Int, data: ByteArray): ByteArray =
+        ByteArray(3 + data.size).also { out ->
+            out[0] = CMD_OTA_WRITE
+            out[1] = ((seq shr 8) and 0xFF).toByte()
+            out[2] = (seq and 0xFF).toByte()
+            data.copyInto(out, 3)
+        }
+
+    fun otaEndPacket(crc: Long): ByteArray =
+        byteArrayOf(
+            CMD_OTA_END,
+            (crc and 0xFF).toByte(),
+            ((crc shr 8) and 0xFF).toByte(),
+            ((crc shr 16) and 0xFF).toByte(),
+            ((crc shr 24) and 0xFF).toByte()
+        )
+
     fun parseStates(data: ByteArray): List<Boolean>? {
         if (data.size != 1 + RELAY_COUNT) return null
         return (1 until data.size).map { data[it] == 1.toByte() }
+    }
+
+    fun setFanSpeedPacket(level: Int): ByteArray =
+        byteArrayOf(CMD_SET_FAN_SPEED, level.toByte())
+
+    val getFanSpeedPacket: ByteArray = byteArrayOf(CMD_GET_FAN_SPEED)
+
+    fun parseFanSpeed(data: ByteArray): Int? {
+        if (data.size != 2) return null
+        val level = data[1].toInt()
+        return if (level in 1..FAN_LEVELS) level else null
+    }
+
+    fun parseFanBusy(data: ByteArray): Boolean? {
+        if (data.size != 2) return null
+        return data[1] == 1.toByte()
     }
 }

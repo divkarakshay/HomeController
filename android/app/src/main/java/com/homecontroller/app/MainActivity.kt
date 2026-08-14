@@ -10,12 +10,21 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -33,8 +42,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,44 +59,107 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-
-private val AppGradient = Brush.linearGradient(
-    colors = listOf(Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364))
-)
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 private val IosGreen = Color(0xFF34C759)
 private val IosOrange = Color(0xFFFF9F0A)
 private val IosRed = Color(0xFFFF453A)
 
-private val White = Color.White
-private val White70 = White.copy(alpha = 0.70f)
-private val White50 = White.copy(alpha = 0.50f)
-private val White30 = White.copy(alpha = 0.30f)
-private val GlassFill = White.copy(alpha = 0.08f)
-private val GlassBorder = White.copy(alpha = 0.16f)
-private val IosMenu = Color(0xFF232E36)
+data class AppColors(
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    val glassFill: Color,
+    val glassBorder: Color,
+    val menuBackground: Color,
+    val connectedGradient: List<Color>,
+    val disconnectedGradient: List<Color>,
+    val switchOffThumb: Color,
+    val switchOffTrack: Color,
+    val segmentedActiveFill: Color,
+    val buttonFill: Color
+)
+
+private val DarkAppColors = AppColors(
+    textPrimary = Color.White,
+    textSecondary = Color.White.copy(alpha = 0.70f),
+    textTertiary = Color.White.copy(alpha = 0.50f),
+    glassFill = Color.White.copy(alpha = 0.08f),
+    glassBorder = Color.White.copy(alpha = 0.16f),
+    menuBackground = Color(0xFF232E36),
+    connectedGradient = listOf(Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)),
+    disconnectedGradient = listOf(Color(0xFF17171B), Color(0xFF1F2127), Color(0xFF292C33)),
+    switchOffThumb = Color.White,
+    switchOffTrack = Color.White.copy(alpha = 0.25f),
+    segmentedActiveFill = Color.White.copy(alpha = 0.28f),
+    buttonFill = Color.White.copy(alpha = 0.14f)
+)
+
+private val LightAppColors = AppColors(
+    textPrimary = Color(0xFF20262B),
+    textSecondary = Color(0xFF46505A),
+    textTertiary = Color(0xFF66717B),
+    glassFill = Color.White.copy(alpha = 0.55f),
+    glassBorder = Color.White.copy(alpha = 0.90f),
+    menuBackground = Color(0xFFF1F4F6),
+    connectedGradient = listOf(Color(0xFFD8E9EF), Color(0xFFBFD7E2), Color(0xFFA4C8D8)),
+    disconnectedGradient = listOf(Color(0xFFECEDEF), Color(0xFFE3E5E8), Color(0xFFDADDE1)),
+    switchOffThumb = Color.White,
+    switchOffTrack = Color(0xFFB9C2C9),
+    segmentedActiveFill = Color.White.copy(alpha = 0.90f),
+    buttonFill = Color.White.copy(alpha = 0.70f)
+)
+
+val LocalAppColors = staticCompositionLocalOf { DarkAppColors }
 
 class MainActivity : ComponentActivity() {
 
@@ -90,10 +167,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val firmwareUri = if (intent?.action == Intent.ACTION_VIEW) intent?.data else null
+        if (firmwareUri != null) {
+            viewModel.uploadFirmware(firmwareUri)
+        }
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                HomeControllerApp(viewModel)
+            val darkTheme = isSystemInDarkTheme()
+            val colors = if (darkTheme) DarkAppColors else LightAppColors
+            CompositionLocalProvider(LocalAppColors provides colors) {
+                MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
+                    HomeControllerApp(viewModel, openSettingsInitially = firmwareUri != null)
+                }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
+            viewModel.uploadFirmware(intent.data!!)
         }
     }
 }
@@ -106,8 +198,11 @@ private fun requiredPermissions(): Array<String> =
     }
 
 @Composable
-fun HomeControllerApp(viewModel: RelayViewModel) {
+fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean = false) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val colors = LocalAppColors.current
+    val context = LocalContext.current
+    val channelStore = remember { ChannelStore(context.applicationContext) }
 
     val bluetoothLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -117,8 +212,10 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { viewModel.permissionResult() }
 
-    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(openSettingsInitially) }
     var menuOpen by remember { mutableStateOf(false) }
+    var timerChannel by remember { mutableStateOf<Int?>(null) }
+    var fanSpeedOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.bluetoothCheck()
@@ -129,16 +226,30 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
         }
     }
 
+    val backgroundColors = (if (state.connected) colors.connectedGradient else colors.disconnectedGradient).map { c ->
+        animateColorAsState(
+            targetValue = c,
+            animationSpec = tween(durationMillis = 900),
+            label = "bg"
+        ).value
+    }
+    val background = Brush.linearGradient(backgroundColors)
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppGradient)
+            .background(background)
     ) {
         if (showSettings) {
             SettingsScreen(
                 connected = state.connected,
                 restoreMode = state.restoreMode,
+                channelStore = channelStore,
+                otaProgress = state.otaProgress,
+                otaStatus = state.otaStatus,
+                error = state.error,
                 onModeChange = viewModel::setRestoreMode,
+                onPickFirmware = viewModel::uploadFirmware,
                 onBack = { showSettings = false }
             )
         } else {
@@ -167,13 +278,13 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
                                 "Bluetooth is off",
-                                color = White,
+                                color = colors.textPrimary,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 "Enable Bluetooth in Settings to control your lights and fan.",
-                                color = White70,
+                                color = colors.textSecondary,
                                 fontSize = 13.sp
                             )
                             Spacer(Modifier.height(12.dp))
@@ -181,8 +292,8 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
                                 onClick = {
                                     bluetoothLauncher.launch(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                                 },
-                                border = BorderStroke(1.dp, GlassBorder),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = White)
+                                border = BorderStroke(1.dp, colors.glassBorder),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.textPrimary)
                             ) {
                                 Text("Open Bluetooth Settings")
                             }
@@ -205,8 +316,14 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
 
                 RelaysGrid(
                     states = state.states,
+                    timers = state.timers,
                     enabled = state.connected,
-                    onToggle = viewModel::toggleRelay
+                    channelStore = channelStore,
+                    fanLevel = state.fanLevel,
+                    fanBusy = state.fanBusy,
+                    onToggle = viewModel::toggleRelay,
+                    onTimerClick = { timerChannel = it },
+                    onFanSpeedClick = { fanSpeedOpen = true }
                 )
 
                 when {
@@ -215,6 +332,30 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
                         onDisconnect = viewModel::disconnect
                     )
                     else -> ConnectCard(state.connecting, viewModel::connect)
+                }
+
+                timerChannel?.let { ch ->
+                    TimerDialog(
+                        channel = ch,
+                        channelName = channelStore.name(ch),
+                        timer = state.timers[ch],
+                        onSet = { minutes, active ->
+                            viewModel.setTimer(ch, minutes, active)
+                            timerChannel = null
+                        },
+                        onDismiss = { timerChannel = null }
+                    )
+                }
+
+                if (fanSpeedOpen) {
+                    FanSpeedDialog(
+                        level = state.fanLevel,
+                        busy = state.fanBusy,
+                        fanOn = state.states.getOrElse(Protocol.RELAY_CH_FAN) { false },
+                        enabled = state.connected,
+                        onSet = viewModel::setFanSpeed,
+                        onDismiss = { fanSpeedOpen = false }
+                    )
                 }
             }
         }
@@ -225,9 +366,21 @@ fun HomeControllerApp(viewModel: RelayViewModel) {
 private fun SettingsScreen(
     connected: Boolean,
     restoreMode: Int,
+    channelStore: ChannelStore,
+    otaProgress: Float?,
+    otaStatus: String?,
+    error: String?,
     onModeChange: (Int) -> Unit,
+    onPickFirmware: (android.net.Uri) -> Unit,
     onBack: () -> Unit
 ) {
+    val colors = LocalAppColors.current
+    val context = LocalContext.current
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) onPickFirmware(uri)
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -242,23 +395,287 @@ private fun SettingsScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = White
+                    tint = colors.textPrimary
                 )
             }
             Spacer(Modifier.width(8.dp))
             Text(
                 text = "Settings",
-                color = White,
+                color = colors.textPrimary,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
         }
+        ChannelsCard(channelStore = channelStore)
         PowerRestoreCard(
             mode = restoreMode,
             enabled = connected,
             onModeChange = onModeChange
         )
+        error?.let { msg ->
+            GlassCard {
+                Text(
+                    text = msg,
+                    color = IosOrange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    fontSize = 14.sp
+                )
+            }
+        }
+        FirmwareUpdateCard(
+            connected = connected,
+            progress = otaProgress,
+            status = otaStatus,
+            onPick = { filePicker.launch(arrayOf("application/octet-stream", "*/*")) }
+        )
     }
+}
+
+@Composable
+private fun FirmwareUpdateCard(
+    connected: Boolean,
+    progress: Float?,
+    status: String?,
+    onPick: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Firmware Update",
+                color = colors.textPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = if (connected) {
+                    "Flash a new firmware over Bluetooth (no USB cable needed)"
+                } else {
+                    "Connect to the device to update"
+                },
+                color = colors.textTertiary,
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onPick,
+                enabled = connected,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, colors.glassBorder),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = colors.buttonFill,
+                    contentColor = colors.textPrimary
+                )
+            ) {
+                Text(
+                    text = if (progress == null && status == null) "Choose firmware (.bin)…"
+                    else if (progress == null) "Choose another file"
+                    else "Uploading…",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (progress != null) {
+                Spacer(Modifier.height(10.dp))
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .height(6.dp),
+                    color = IosGreen,
+                    trackColor = colors.glassFill
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "${(progress * 100).toInt()}%",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
+            status?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    color = colors.textSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelsCard(channelStore: ChannelStore) {
+    val colors = LocalAppColors.current
+    var editChannel by remember { mutableStateOf<Int?>(null) }
+
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Channels",
+                color = colors.textPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Rename channels and pick an icon",
+                color = colors.textTertiary,
+                fontSize = 12.sp
+            )
+            Spacer(Modifier.height(8.dp))
+            for (ch in 0 until Protocol.RELAY_COUNT) {
+                EditChannelRow(
+                    channel = ch,
+                    name = channelStore.name(ch),
+                    iconKey = channelStore.iconKey(ch),
+                    onEdit = { editChannel = ch },
+                    onRename = { channelStore.setName(ch, it) }
+                )
+            }
+        }
+    }
+
+    editChannel?.let { ch ->
+        ChannelEditDialog(
+            channel = ch,
+            name = channelStore.name(ch),
+            iconKey = channelStore.iconKey(ch),
+            onRename = { channelStore.setName(ch, it) },
+            onIcon = { channelStore.setIconKey(ch, it) },
+            onDismiss = { editChannel = null }
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.EditChannelRow(
+    channel: Int,
+    name: String,
+    iconKey: String,
+    onEdit: () -> Unit,
+    onRename: (String) -> Unit
+) {
+    val colors = LocalAppColors.current
+    var text by remember(channel) { mutableStateOf(name) }
+    val icon = ChannelCatalog.byKey(iconKey)
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it; onRename(it) },
+        singleLine = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        leadingIcon = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onEdit)
+                    .padding(4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon.icon,
+                    contentDescription = icon.label,
+                    tint = colors.textPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        },
+        placeholder = { Text(Protocol.RELAY_NAMES[channel], color = colors.textTertiary, fontSize = 14.sp) },
+        textStyle = LocalTextStyle.current.copy(color = colors.textPrimary, fontSize = 14.sp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            focusedBorderColor = colors.glassBorder,
+            unfocusedBorderColor = colors.glassBorder,
+            cursorColor = colors.textPrimary
+        )
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChannelEditDialog(
+    channel: Int,
+    name: String,
+    iconKey: String,
+    onRename: (String) -> Unit,
+    onIcon: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.menuBackground,
+        title = { Text(Protocol.RELAY_NAMES[channel], color = colors.textPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Pick an icon for this channel",
+                    color = colors.textSecondary,
+                    fontSize = 13.sp
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ChannelCatalog.options.forEach { option ->
+                        val selected = option.key == iconKey
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    if (selected) colors.segmentedActiveFill else colors.glassFill,
+                                    RoundedCornerShape(14.dp)
+                                )
+                                .clickable { onIcon(option.key); onDismiss() }
+                                .padding(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = option.icon,
+                                contentDescription = option.label,
+                                tint = if (selected) colors.textPrimary else colors.textSecondary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Text(
+                                text = option.label,
+                                color = if (selected) colors.textPrimary else colors.textTertiary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = onRename,
+                    singleLine = true,
+                    label = { Text("Name", color = colors.textTertiary) },
+                    textStyle = LocalTextStyle.current.copy(color = colors.textPrimary),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = colors.textPrimary,
+                        unfocusedTextColor = colors.textPrimary,
+                        focusedBorderColor = colors.glassBorder,
+                        unfocusedBorderColor = colors.glassBorder,
+                        cursorColor = colors.textPrimary
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
+            ) {
+                Text("Done")
+            }
+        }
+    )
 }
 
 @Composable
@@ -269,6 +686,7 @@ private fun Header(
     onMenuOpenChange: (Boolean) -> Unit,
     onSettingsClick: () -> Unit
 ) {
+    val colors = LocalAppColors.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -276,26 +694,26 @@ private fun Header(
         Box(
             modifier = Modifier
                 .size(46.dp)
-                .background(GlassFill, RoundedCornerShape(14.dp))
+                .background(colors.glassFill, RoundedCornerShape(14.dp))
                 .padding(10.dp)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(White.copy(alpha = 0.20f), CircleShape)
+                    .background(colors.textPrimary.copy(alpha = 0.20f), CircleShape)
             )
         }
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = Protocol.DEVICE_NAME,
-                color = White,
+                color = colors.textPrimary,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = "Living Room · 8 channels",
-                color = White50,
+                color = colors.textTertiary,
                 fontSize = 13.sp
             )
         }
@@ -306,23 +724,23 @@ private fun Header(
                 Icon(
                     imageVector = Icons.Default.MoreVert,
                     contentDescription = "More options",
-                    tint = White
+                    tint = colors.textPrimary
                 )
             }
             DropdownMenu(
                 expanded = menuOpen,
                 onDismissRequest = { onMenuOpenChange(false) },
-                containerColor = IosMenu
+                containerColor = colors.menuBackground
             ) {
                 DropdownMenuItem(
                     text = {
-                        Text("Settings", color = White, fontWeight = FontWeight.Medium)
+                        Text("Settings", color = colors.textPrimary, fontWeight = FontWeight.Medium)
                     },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = null,
-                            tint = White
+                            tint = colors.textPrimary
                         )
                     },
                     onClick = onSettingsClick
@@ -334,6 +752,7 @@ private fun Header(
 
 @Composable
 private fun StatusPill(connected: Boolean, connecting: Boolean) {
+    val colors = LocalAppColors.current
     val (label, color) = when {
         connected -> "Connected" to IosGreen
         connecting -> "Connecting…" to IosOrange
@@ -341,7 +760,7 @@ private fun StatusPill(connected: Boolean, connecting: Boolean) {
     }
     Row(
         modifier = Modifier
-            .background(GlassFill, RoundedCornerShape(50))
+            .background(colors.glassFill, RoundedCornerShape(50))
             .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -353,7 +772,7 @@ private fun StatusPill(connected: Boolean, connecting: Boolean) {
         Spacer(Modifier.width(7.dp))
         Text(
             text = label,
-            color = White,
+            color = colors.textPrimary,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium
         )
@@ -365,11 +784,12 @@ private fun GlassCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val colors = LocalAppColors.current
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = GlassFill),
-        border = BorderStroke(1.dp, GlassBorder),
+        colors = CardDefaults.cardColors(containerColor = colors.glassFill),
+        border = BorderStroke(1.dp, colors.glassBorder),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         content()
@@ -379,14 +799,26 @@ private fun GlassCard(
 @Composable
 private fun RelaysGrid(
     states: List<Boolean>,
+    timers: Map<Int, Protocol.TimerInfo>,
     enabled: Boolean,
-    onToggle: (Int, Boolean) -> Unit
+    channelStore: ChannelStore,
+    fanLevel: Int,
+    fanBusy: Boolean,
+    onToggle: (Int, Boolean) -> Unit,
+    onTimerClick: (Int) -> Unit,
+    onFanSpeedClick: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         for (row in 0 until Protocol.RELAY_COUNT step 2) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                RelayTile(row, states, enabled, onToggle)
-                RelayTile(row + 1, states, enabled, onToggle)
+                RelayTile(
+                    row, states, timers, enabled, channelStore,
+                    fanLevel, fanBusy, onToggle, onTimerClick, onFanSpeedClick
+                )
+                RelayTile(
+                    row + 1, states, timers, enabled, channelStore,
+                    fanLevel, fanBusy, onToggle, onTimerClick, onFanSpeedClick
+                )
             }
         }
     }
@@ -396,53 +828,467 @@ private fun RelaysGrid(
 private fun RowScope.RelayTile(
     channel: Int,
     states: List<Boolean>,
+    timers: Map<Int, Protocol.TimerInfo>,
     enabled: Boolean,
-    onToggle: (Int, Boolean) -> Unit
+    channelStore: ChannelStore,
+    fanLevel: Int,
+    fanBusy: Boolean,
+    onToggle: (Int, Boolean) -> Unit,
+    onTimerClick: (Int) -> Unit,
+    onFanSpeedClick: () -> Unit
 ) {
+    val colors = LocalAppColors.current
     val on = states.getOrElse(channel) { false }
+    val icon = ChannelCatalog.byKey(channelStore.iconKey(channel))
+    val timer = timers[channel]
     GlassCard(
         modifier = Modifier
             .weight(1f)
-            .height(128.dp)
+            .height(112.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
+                .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
-                Text(
-                    text = Protocol.RELAY_NAMES[channel],
-                    color = White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon.icon,
+                        contentDescription = icon.label,
+                        tint = if (on) IosGreen else colors.textTertiary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = channelStore.name(channel),
+                        color = colors.textPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
                     text = if (on) "ON" else "OFF",
-                    color = if (on) IosGreen else White50,
+                    color = if (on) IosGreen else colors.textTertiary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
-            Switch(
-                checked = on,
-                onCheckedChange = { onToggle(channel, it) },
-                enabled = enabled,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = White,
-                    checkedTrackColor = IosGreen,
-                    uncheckedThumbColor = White,
-                    uncheckedTrackColor = White.copy(alpha = 0.25f),
-                    uncheckedBorderColor = Color.Transparent,
-                    disabledCheckedThumbColor = White.copy(alpha = 0.60f),
-                    disabledCheckedTrackColor = IosGreen.copy(alpha = 0.45f),
-                    disabledUncheckedThumbColor = White.copy(alpha = 0.50f),
-                    disabledUncheckedTrackColor = White.copy(alpha = 0.12f)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                if (timer != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.glassFill)
+                            .clickable(enabled = enabled) { onTimerClick(channel) }
+                            .padding(start = 8.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Timer,
+                            contentDescription = "Timer",
+                            tint = IosOrange,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "${timer.minutes}m",
+                            color = IosOrange,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        IconButton(
+                            onClick = { onTimerClick(channel) },
+                            modifier = Modifier.size(22.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Edit timer",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                } else {
+                    IconButton(onClick = { onTimerClick(channel) }) {
+                        Icon(
+                            imageVector = Icons.Filled.Timer,
+                            contentDescription = "Set timer",
+                            tint = if (enabled) colors.textTertiary else colors.textTertiary.copy(alpha = 0.40f)
+                        )
+                    }
+                }
+                if (channel == Protocol.RELAY_CH_FAN) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.glassFill)
+                            .clickable(enabled = enabled) { onFanSpeedClick() }
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Bolt,
+                            contentDescription = "Fan speed",
+                            tint = if (fanBusy) IosOrange else IosGreen,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = if (fanLevel == Protocol.FAN_LEVEL_BOOST) "Boost" else "Speed $fanLevel",
+                            color = if (fanBusy) IosOrange else colors.textPrimary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                Switch(
+                    checked = on,
+                    onCheckedChange = { onToggle(channel, it) },
+                    enabled = enabled,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = IosGreen,
+                        uncheckedThumbColor = colors.switchOffThumb,
+                        uncheckedTrackColor = colors.switchOffTrack,
+                        uncheckedBorderColor = Color.Transparent,
+                        disabledCheckedThumbColor = Color.White.copy(alpha = 0.60f),
+                        disabledCheckedTrackColor = IosGreen.copy(alpha = 0.45f),
+                        disabledUncheckedThumbColor = colors.switchOffThumb.copy(alpha = 0.50f),
+                        disabledUncheckedTrackColor = colors.switchOffTrack.copy(alpha = 0.50f)
+                    )
                 )
-            )
+            }
         }
     }
+}
+
+// ---- Fan speed rotary dial (Atomberg-style) ----
+// Six levels on a 60°-spaced circle: Speed 1-5 plus Boost. The needle snaps to
+// the nearest notch while dragging; releasing commits the speed, which the
+// controller applies by cycling the fan relay (OFF ~1 s, ON ~2.5 s per step).
+
+private val FanMarkAngles = (0 until Protocol.FAN_LEVELS).map { i -> (270 + i * 60) % 360 }
+
+private fun fanAngleToLevel(angleDeg: Float): Int {
+    var best = 0
+    var bestDist = 360f
+    for (i in 0 until Protocol.FAN_LEVELS) {
+        var d = abs(angleDeg - FanMarkAngles[i])
+        if (d > 180f) d = 360f - d
+        if (d < bestDist) {
+            bestDist = d
+            best = i
+        }
+    }
+    return best + 1
+}
+
+private fun fanLevelName(level: Int): String =
+    if (level == Protocol.FAN_LEVEL_BOOST) "Boost" else "Speed $level"
+
+@Composable
+private fun FanSpeedDialog(
+    level: Int,
+    busy: Boolean,
+    fanOn: Boolean,
+    enabled: Boolean,
+    onSet: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.menuBackground,
+        title = {
+            Column {
+                Text("Fan Speed", color = colors.textPrimary, fontWeight = FontWeight.Bold)
+                Text(
+                    "Atomberg-style · 1–5 + Boost",
+                    color = colors.textTertiary,
+                    fontSize = 12.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                FanRotaryDial(
+                    level = level,
+                    busy = busy,
+                    enabled = enabled && !busy,
+                    onLevelCommit = onSet
+                )
+                if (busy) {
+                    Text(
+                        "Cycling to ${fanLevelName(level)}… ~3.5 s per step",
+                        color = IosOrange,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                } else {
+                    Text(
+                        "Drag the dial to pick a speed. Each level steps the fan relay " +
+                            "OFF ~1 s, ON ~2.5 s — the same rhythm as the wall-switch trick.",
+                        color = colors.textSecondary,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center
+                    )
+                    if (!fanOn) {
+                        Text(
+                            "The fan is OFF — it will be turned on first.",
+                            color = colors.textTertiary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
+            ) {
+                Text("Done")
+            }
+        }
+    )
+}
+
+@Composable
+private fun FanRotaryDial(
+    level: Int,
+    busy: Boolean,
+    enabled: Boolean,
+    onLevelCommit: (Int) -> Unit
+) {
+    val colors = LocalAppColors.current
+    val haptic = LocalHapticFeedback.current
+    val textMeasurer = rememberTextMeasurer()
+    var dragPreview by remember { mutableStateOf<Int?>(null) }
+    val shownLevel = dragPreview ?: level
+
+    fun pick(offset: Offset, boxSize: androidx.compose.ui.geometry.Size) {
+        if (!enabled) return
+        val center = Offset(boxSize.width / 2f, boxSize.height / 2f)
+        val raw = Math.toDegrees(
+            atan2((offset.y - center.y).toDouble(), (offset.x - center.x).toDouble())
+        ).toFloat()
+        val angle = ((raw % 360f) + 360f) % 360f
+        val target = fanAngleToLevel(angle)
+        if (dragPreview == target) return
+        dragPreview = target
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
+    Box(
+        modifier = Modifier
+            .size(240.dp)
+            .pointerInput(enabled) {
+                detectDragGestures(
+                    onDrag = { change, _ ->
+                        pick(change.position, size.toSize())
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        dragPreview?.let { onLevelCommit(it) }
+                        dragPreview = null
+                    },
+                    onDragCancel = { dragPreview = null }
+                )
+            }
+            .pointerInput(enabled) {
+                detectTapGestures { offset ->
+                    pick(offset, size.toSize())
+                    dragPreview?.let { onLevelCommit(it) }
+                    dragPreview = null
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawFanDial(shownLevel, busy, colors, textMeasurer)
+        }
+    }
+}
+
+private fun DrawScope.drawFanDial(
+    level: Int,
+    busy: Boolean,
+    colors: AppColors,
+    textMeasurer: androidx.compose.ui.text.TextMeasurer
+) {
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val outer = minOf(size.width, size.height) / 2f - 10.dp.toPx()
+    val boost = level == Protocol.FAN_LEVEL_BOOST
+
+    drawCircle(
+        color = colors.glassBorder,
+        radius = outer,
+        center = Offset(cx, cy),
+        style = Stroke(2.dp.toPx())
+    )
+
+    // LED dots around the ring — lit like the fan's indicator disk.
+    for (i in 0 until Protocol.FAN_LEVELS) {
+        val angle = Math.toRadians(FanMarkAngles[i].toDouble())
+        val pos = Offset(
+            cx + cos(angle).toFloat() * outer,
+            cy + sin(angle).toFloat() * outer
+        )
+        val lit = i < level
+        val ledColor = when {
+            boost && lit -> IosOrange
+            lit -> IosGreen
+            else -> colors.textTertiary.copy(alpha = 0.35f)
+        }
+        drawCircle(color = ledColor, radius = 7.dp.toPx(), center = pos)
+    }
+
+    // Level labels inside the LED ring.
+    val labelRadius = outer - 28.dp.toPx()
+    for (i in 0 until Protocol.FAN_LEVELS) {
+        val angle = Math.toRadians(FanMarkAngles[i].toDouble())
+        val pos = Offset(
+            cx + cos(angle).toFloat() * labelRadius,
+            cy + sin(angle).toFloat() * labelRadius
+        )
+        val text = if (i == Protocol.FAN_LEVEL_BOOST - 1) "B" else "${i + 1}"
+        val layout = textMeasurer.measure(
+            AnnotatedString(text),
+            style = TextStyle(
+                color = if (i + 1 == level) colors.textPrimary else colors.textTertiary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        )
+        drawText(
+            layout,
+            topLeft = Offset(pos.x - layout.size.width / 2f, pos.y - layout.size.height / 2f)
+        )
+    }
+
+    // Needle pointing at the selected level.
+    val sel = level - 1
+    val selAngle = Math.toRadians(FanMarkAngles[sel].toDouble())
+    val needleStart = Offset(
+        cx + cos(selAngle).toFloat() * 42.dp.toPx(),
+        cy + sin(selAngle).toFloat() * 42.dp.toPx()
+    )
+    val needleEnd = Offset(
+        cx + cos(selAngle).toFloat() * (outer - 2.dp.toPx()),
+        cy + sin(selAngle).toFloat() * (outer - 2.dp.toPx())
+    )
+    drawLine(
+        color = if (busy) IosOrange.copy(alpha = 0.65f) else colors.textPrimary,
+        start = needleStart,
+        end = needleEnd,
+        strokeWidth = 5.dp.toPx(),
+        cap = StrokeCap.Round
+    )
+
+    // Center hub with the current level.
+    drawCircle(color = colors.segmentedActiveFill, radius = 34.dp.toPx(), center = Offset(cx, cy))
+    drawCircle(
+        color = colors.glassBorder,
+        radius = 34.dp.toPx(),
+        center = Offset(cx, cy),
+        style = Stroke(1.dp.toPx())
+    )
+    val hubText = when {
+        boost -> "B"
+        busy -> "…"
+        else -> "$level"
+    }
+    val hub = textMeasurer.measure(
+        AnnotatedString(hubText),
+        style = TextStyle(
+            color = colors.textPrimary,
+            fontSize = if (boost) 20.sp else 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+    )
+    drawText(
+        hub,
+        topLeft = Offset(cx - hub.size.width / 2f, cy - hub.size.height / 2f)
+    )
+}
+
+@Composable
+private fun TimerDialog(
+    channel: Int,
+    channelName: String,
+    timer: Protocol.TimerInfo?,
+    onSet: (Int, Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    var minutes by remember { mutableStateOf((timer?.minutes ?: 15).toString()) }
+    val parsed = minutes.toIntOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.menuBackground,
+        title = {
+            Text(
+                text = "Off timer — $channelName",
+                color = colors.textPrimary
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Turn this channel off after N minutes. Timers reset when the controller loses power.",
+                    color = colors.textSecondary,
+                    fontSize = 13.sp
+                )
+                OutlinedTextField(
+                    value = minutes,
+                    onValueChange = { minutes = it.filter { c -> c.isDigit() }.take(4) },
+                    singleLine = true,
+                    label = { Text("Minutes", color = colors.textTertiary) },
+                    textStyle = LocalTextStyle.current.copy(color = colors.textPrimary),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = colors.textPrimary,
+                        unfocusedTextColor = colors.textPrimary,
+                        focusedBorderColor = colors.glassBorder,
+                        unfocusedBorderColor = colors.glassBorder,
+                        cursorColor = colors.textPrimary
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (parsed != null && parsed > 0) onSet(parsed, true)
+                },
+                enabled = parsed != null && parsed > 0,
+                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
+            ) {
+                Text("Start")
+            }
+        },
+        dismissButton = {
+            if (timer != null) {
+                TextButton(
+                    onClick = { onSet(minutes.toIntOrNull() ?: 0, false) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = colors.textSecondary)
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
+    )
 }
 
 @Composable
@@ -451,11 +1297,12 @@ private fun PowerRestoreCard(
     enabled: Boolean,
     onModeChange: (Int) -> Unit
 ) {
+    val colors = LocalAppColors.current
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = "Power Restore",
-                color = White,
+                color = colors.textPrimary,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -465,7 +1312,7 @@ private fun PowerRestoreCard(
                 } else {
                     "Connect to the device to change this setting"
                 },
-                color = White50,
+                color = colors.textTertiary,
                 fontSize = 12.sp
             )
             Spacer(Modifier.height(12.dp))
@@ -476,13 +1323,13 @@ private fun PowerRestoreCard(
                     enabled = enabled,
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                     colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = White.copy(alpha = 0.28f),
-                        activeContentColor = White,
+                        activeContainerColor = colors.segmentedActiveFill,
+                        activeContentColor = colors.textPrimary,
                         inactiveContainerColor = Color.Transparent,
-                        inactiveContentColor = White70,
-                        disabledActiveContainerColor = White.copy(alpha = 0.16f),
-                        disabledActiveContentColor = White50,
-                        disabledInactiveContentColor = White30
+                        inactiveContentColor = colors.textSecondary,
+                        disabledActiveContainerColor = colors.segmentedActiveFill.copy(alpha = 0.50f),
+                        disabledActiveContentColor = colors.textTertiary,
+                        disabledInactiveContentColor = colors.textTertiary.copy(alpha = 0.60f)
                     )
                 ) {
                     Text("Last state", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -493,13 +1340,13 @@ private fun PowerRestoreCard(
                     enabled = enabled,
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                     colors = SegmentedButtonDefaults.colors(
-                        activeContainerColor = White.copy(alpha = 0.28f),
-                        activeContentColor = White,
+                        activeContainerColor = colors.segmentedActiveFill,
+                        activeContentColor = colors.textPrimary,
                         inactiveContainerColor = Color.Transparent,
-                        inactiveContentColor = White70,
-                        disabledActiveContainerColor = White.copy(alpha = 0.16f),
-                        disabledActiveContentColor = White50,
-                        disabledInactiveContentColor = White30
+                        inactiveContentColor = colors.textSecondary,
+                        disabledActiveContainerColor = colors.segmentedActiveFill.copy(alpha = 0.50f),
+                        disabledActiveContentColor = colors.textTertiary,
+                        disabledInactiveContentColor = colors.textTertiary.copy(alpha = 0.60f)
                     )
                 ) {
                     Text("All off", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -511,6 +1358,7 @@ private fun PowerRestoreCard(
 
 @Composable
 private fun ConnectCard(connecting: Boolean, onConnect: () -> Unit) {
+    val colors = LocalAppColors.current
     GlassCard {
         Column(
             modifier = Modifier
@@ -520,14 +1368,14 @@ private fun ConnectCard(connecting: Boolean, onConnect: () -> Unit) {
         ) {
             Text(
                 text = if (connecting) "Looking for your device…" else "Not Connected",
-                color = White,
+                color = colors.textPrimary,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "Tap Connect to scan for HomeController over Bluetooth",
-                color = White70,
+                color = colors.textSecondary,
                 fontSize = 13.sp
             )
             Spacer(Modifier.height(16.dp))
@@ -538,16 +1386,16 @@ private fun ConnectCard(connecting: Boolean, onConnect: () -> Unit) {
                     .fillMaxWidth()
                     .height(52.dp),
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, White.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, colors.glassBorder),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = White.copy(alpha = 0.14f),
-                    contentColor = White
+                    containerColor = colors.buttonFill,
+                    contentColor = colors.textPrimary
                 )
             ) {
                 if (connecting) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
-                        color = White,
+                        color = colors.textPrimary,
                         strokeWidth = 2.dp
                     )
                     Spacer(Modifier.width(10.dp))
@@ -562,6 +1410,7 @@ private fun ConnectCard(connecting: Boolean, onConnect: () -> Unit) {
 
 @Composable
 private fun ConnectedActions(onRefresh: () -> Unit, onDisconnect: () -> Unit) {
+    val colors = LocalAppColors.current
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         OutlinedButton(
             onClick = onRefresh,
@@ -569,8 +1418,8 @@ private fun ConnectedActions(onRefresh: () -> Unit, onDisconnect: () -> Unit) {
                 .weight(1f)
                 .height(48.dp),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, GlassBorder),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = White)
+            border = BorderStroke(1.dp, colors.glassBorder),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.textPrimary)
         ) {
             Text("Refresh", fontWeight = FontWeight.SemiBold)
         }
@@ -580,8 +1429,8 @@ private fun ConnectedActions(onRefresh: () -> Unit, onDisconnect: () -> Unit) {
                 .weight(1f)
                 .height(48.dp),
             shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, GlassBorder),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = White70)
+            border = BorderStroke(1.dp, colors.glassBorder),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.textSecondary)
         ) {
             Text("Disconnect", fontWeight = FontWeight.SemiBold)
         }

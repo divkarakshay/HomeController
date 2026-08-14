@@ -110,10 +110,41 @@ What the ESP32 does at boot after a power cut is configurable from the app
 | `02`                            | Request all states               | `A4 <s0..s7>`                |
 | `03 <mode>`                     | Set power-restore mode (0 = last state, 1 = all off) | `A6 <mode>` |
 | `04`                            | Request power-restore mode       | `A6 <mode>`                  |
+| `0A <level>`                    | Set fan speed level 1–6 (6 = boost) | `AF <0/1>` + `AE <level>` |
+| `0B`                            | Request fan speed level          | `AE <level>`                 |
 
 Response codes: `A2` set OK, `A4` states (also pushed automatically to any phone when it
-subscribes), `A5` channel changed by a manual switch, `A6` restore mode, `E1` bad command,
-`E2` bad channel.
+subscribes), `A5` channel changed by a manual switch, `A6` restore mode, `A7` timer,
+`AE` fan speed level (also pushed when a speed change finishes), `AF` fan cycling busy
+state (1 = cycling, 0 = idle), `E1` bad command, `E2` bad channel.
+
+## Atomberg-style fan speed control
+
+The fan runs off relay CH0 (on/off only), so the only speed control it understands is the
+wall-switch pattern that Atomberg BLDC fans respond to: **turn the relay OFF ~1 s, then ON;
+each OFF-ON cycle steps the fan up one level** (Speed 1→2→…→5→Boost, and Boost wraps back
+to Speed 1). The app's rotary dial (⚡ pill on the fan tile → **Fan Speed**) automates
+exactly that pattern with millisecond precision in the firmware:
+
+| Setting | Value |
+|---------|-------|
+| Levels | 1–5 + Boost (6 = max) |
+| Relay OFF pulse | 1.0 s per step |
+| Relay ON between steps | 2.5 s (the fan must register each level) |
+| Power-on warm-up | 3.0 s before the first pulse when the fan was OFF |
+
+- The dial shows the fan's indicator disk — 1–5 green LEDs lit for the speed, all 6 amber
+  for Boost — and snaps with haptic feedback.
+- While cycling, the app shows progress and the dial locks; new requests made mid-cycle
+  are queued and applied when the current cycle finishes.
+- The level is saved in the ESP32's NVS (like the relay states) and restored at boot, so
+  the dial is correct after a power cut.
+- Anything that takes direct control of the fan relay aborts the cycle: toggling the
+  switch in the app, flipping the physical wall switch, or the off-timer firing.
+- Limitation: if the fan's speed is changed with the physical switch trick, the
+  controller can't detect it — the dial assumes the last level it set.
+- Add a triac/dimmer on CH0 instead of a relay to get instant, silent speed changes
+  (then drop the cycling timing constants in `firmware/include/config.h`).
 
 ## Build & flash the ESP32
 
@@ -172,6 +203,8 @@ adb logcat -d | grep -E "BleRelayManager"     # view BLE logs from the app
 
 - The app auto-connects on launch; status shows **Connected / Connecting… / Offline**.
 - When connected: toggle the 8 tiles (Fan + Light 1–7), **Refresh**, **Disconnect**.
+- The fan tile has a ⚡ **Speed** pill — tap it for the rotary dial to set the fan speed
+  1–5 + Boost (the controller steps the fan relay like the wall-switch trick).
 - **⋮ → Settings** opens the settings screen with the **Power Restore** mode selector.
 - Bluetooth + location (Android ≤ 10) permissions are requested on first launch.
 - The fan channel currently uses GPIO2 (which also drives the onboard LED — the LED is a

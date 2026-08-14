@@ -29,6 +29,13 @@ class BleRelayManager(private val context: Context) {
         fun onStates(states: List<Boolean>)
         fun onStateChanged(channel: Int, on: Boolean) {}
         fun onRestoreMode(mode: Int) {}
+        fun onTimer(timer: Protocol.TimerInfo) {}
+        fun onFanSpeed(level: Int) {}
+        fun onFanBusy(busy: Boolean) {}
+        fun onOtaStatus(status: String, crcMismatch: Boolean) {}
+        fun onOtaAck(seq: Int) {}
+        fun onOtaResendFrom(seq: Int) {}
+        fun onOtaStarted() {}
         fun onError(message: String)
     }
 
@@ -48,6 +55,9 @@ class BleRelayManager(private val context: Context) {
 
     val isEnabled: Boolean
         get() = adapter.isEnabled
+
+    val isReady: Boolean
+        get() = writeChar != null && gatt != null
 
     val deviceName: String?
         @SuppressLint("MissingPermission")
@@ -170,6 +180,59 @@ class BleRelayManager(private val context: Context) {
     @SuppressLint("MissingPermission")
     fun requestRestoreMode() {
         writeChar?.let { write(it, Protocol.getModePacket) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun setTimer(channel: Int, minutes: Int, active: Boolean = minutes > 0) {
+        writeChar?.let { write(it, Protocol.timerPacket(channel, minutes, active)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun setFanSpeed(level: Int) {
+        writeChar?.let { write(it, Protocol.setFanSpeedPacket(level)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun requestFanSpeed() {
+        writeChar?.let { write(it, Protocol.getFanSpeedPacket) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun syncEpoch() {
+        val epoch = System.currentTimeMillis() / 1000
+        writeChar?.let { write(it, Protocol.epochPacket(epoch)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun startOta(size: Int) {
+        writeChar?.let { write(it, Protocol.otaBeginPacket(size)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun writeOtaChunk(seq: Int, data: ByteArray): Boolean {
+        val g = gatt ?: return false
+        val char = writeChar ?: return false
+        val packet = Protocol.otaWritePacket(seq, data)
+        // writeCharacteristic returns false while the GATT write queue is
+        // full. Block (with a small sleep) until the controller drains it
+        // instead of silently dropping chunks.
+        val deadline = System.currentTimeMillis() + 2000
+        while (System.currentTimeMillis() < deadline) {
+            @Suppress("DEPRECATION")
+            char.value = packet
+            @Suppress("DEPRECATION")
+            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            @Suppress("DEPRECATION")
+            val ok: Boolean = runCatching { g.writeCharacteristic(char) }.getOrDefault(true)
+            if (ok) return true
+            Thread.sleep(2)
+        }
+        return false
+    }
+
+    @SuppressLint("MissingPermission")
+    fun endOta(crc: Long) {
+        writeChar?.let { write(it, Protocol.otaEndPacket(crc)) }
     }
 
     @SuppressLint("MissingPermission")
@@ -306,6 +369,38 @@ class BleRelayManager(private val context: Context) {
                 Log.d(TAG, "Restore mode received")
                 if (data.size == 2) listener?.onRestoreMode(data[1].toInt())
             }
+            Protocol.RSP_TIMER_OK -> {
+                Log.d(TAG, "Timer received")
+                Protocol.parseTimer(data)?.let { listener?.onTimer(it) }
+            }
+            Protocol.RSP_FAN_SPEED -> {
+                Log.d(TAG, "Fan speed received")
+                Protocol.parseFanSpeed(data)?.let { listener?.onFanSpeed(it) }
+            }
+            Protocol.RSP_FAN_BUSY -> {
+                Log.d(TAG, "Fan busy received")
+                Protocol.parseFanBusy(data)?.let { listener?.onFanBusy(it) }
+            }
+            Protocol.RSP_OTA_BEGIN -> {
+                Log.d(TAG, "OTA upload started")
+                listener?.onOtaStarted()
+            }
+            Protocol.RSP_OTA_ACK -> {
+                if (data.size >= 3) {
+                    val seq = ((data[1].toInt() and 0xFF) shl 8) or (data[2].toInt() and 0xFF)
+                    Log.d(TAG, "OTA chunk acked: $seq")
+                    listener?.onOtaAck(seq)
+                }
+            }
+            Protocol.RSP_OTA_RESEND -> {
+                if (data.size >= 3) {
+                    val seq = ((data[1].toInt() and 0xFF) shl 8) or (data[2].toInt() and 0xFF)
+                    Log.d(TAG, "OTA resend from: $seq")
+                    listener?.onOtaResendFrom(seq)
+                }
+            }
+            Protocol.RSP_OTA_END -> listener?.onOtaStatus("Firmware sent — controller is restarting", false)
+            Protocol.RSP_OTA_CRC_ERR -> listener?.onOtaStatus("CRC mismatch — update rejected", true)
             Protocol.RSP_SET_OK -> Log.d(TAG, "Set applied")
         }
     }
