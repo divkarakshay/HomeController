@@ -714,14 +714,20 @@ private fun Header(
                 text = Protocol.DEVICE_NAME,
                 color = colors.textPrimary,
                 fontSize = 24.sp,
-                lineHeight = 26.sp,
-                fontWeight = FontWeight.Bold
+                lineHeight = 30.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = false
             )
             Text(
                 text = "Living Room · 8 channels",
                 color = colors.textTertiary,
                 fontSize = 13.sp,
-                lineHeight = 15.sp
+                lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                softWrap = false
             )
         }
         StatusPill(connected, connecting)
