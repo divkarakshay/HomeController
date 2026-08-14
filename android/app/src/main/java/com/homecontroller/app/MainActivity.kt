@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -43,10 +44,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Power
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -84,6 +87,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -100,6 +104,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -215,7 +220,6 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
 
     var showSettings by rememberSaveable { mutableStateOf(openSettingsInitially) }
     var menuOpen by remember { mutableStateOf(false) }
-    var timerChannel by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.bluetoothCheck()
@@ -248,7 +252,12 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                 otaProgress = state.otaProgress,
                 otaStatus = state.otaStatus,
                 error = state.error,
+                rules = state.rules,
+                deviceEpoch = state.deviceEpoch,
+                timeSynced = state.timeSynced,
                 onModeChange = viewModel::setRestoreMode,
+                onSetRule = viewModel::setRule,
+                onSyncClock = viewModel::syncClock,
                 onPickFirmware = viewModel::uploadFirmware,
                 onBack = { showSettings = false }
             )
@@ -323,7 +332,9 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                     iconKey = channelStore.iconKey(Protocol.RELAY_CH_FAN),
                     timer = state.timers[Protocol.RELAY_CH_FAN],
                     onToggle = { viewModel.toggleRelay(Protocol.RELAY_CH_FAN, it) },
-                    onTimerClick = { timerChannel = Protocol.RELAY_CH_FAN },
+                    onTimerSet = { minutes, active ->
+                        viewModel.setTimer(Protocol.RELAY_CH_FAN, minutes, active)
+                    },
                     onSetSpeed = viewModel::setFanSpeed
                 )
 
@@ -333,7 +344,7 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                     enabled = state.connected,
                     channelStore = channelStore,
                     onToggle = viewModel::toggleRelay,
-                    onTimerClick = { timerChannel = it }
+                    onTimerSet = viewModel::setTimer
                 )
 
                 when {
@@ -342,19 +353,6 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                         onDisconnect = viewModel::disconnect
                     )
                     else -> ConnectCard(state.connecting, viewModel::connect)
-                }
-
-                timerChannel?.let { ch ->
-                    TimerDialog(
-                        channel = ch,
-                        channelName = channelStore.name(ch),
-                        timer = state.timers[ch],
-                        onSet = { minutes, active ->
-                            viewModel.setTimer(ch, minutes, active)
-                            timerChannel = null
-                        },
-                        onDismiss = { timerChannel = null }
-                    )
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -371,7 +369,12 @@ private fun SettingsScreen(
     otaProgress: Float?,
     otaStatus: String?,
     error: String?,
+    rules: List<Protocol.TimeRule>,
+    deviceEpoch: Long,
+    timeSynced: Boolean,
     onModeChange: (Int) -> Unit,
+    onSetRule: (Protocol.TimeRule) -> Unit,
+    onSyncClock: () -> Unit,
     onPickFirmware: (android.net.Uri) -> Unit,
     onBack: () -> Unit
 ) {
@@ -408,6 +411,15 @@ private fun SettingsScreen(
             )
         }
         ChannelsCard(channelStore = channelStore)
+        TimeRulesCard(
+            rules = rules,
+            deviceEpoch = deviceEpoch,
+            timeSynced = timeSynced,
+            enabled = connected,
+            channelStore = channelStore,
+            onSetRule = onSetRule,
+            onSyncClock = onSyncClock
+        )
         PowerRestoreCard(
             mode = restoreMode,
             enabled = connected,
@@ -692,30 +704,19 @@ private fun Header(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .background(colors.glassFill, RoundedCornerShape(14.dp))
-                .padding(10.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.textPrimary.copy(alpha = 0.20f), CircleShape)
-            )
-        }
-        Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = Protocol.DEVICE_NAME,
                 color = colors.textPrimary,
                 fontSize = 24.sp,
+                lineHeight = 26.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = "Living Room · 8 channels",
                 color = colors.textTertiary,
-                fontSize = 13.sp
+                fontSize = 13.sp,
+                lineHeight = 15.sp
             )
         }
         StatusPill(connected, connecting)
@@ -804,7 +805,7 @@ private fun RelaysGrid(
     enabled: Boolean,
     channelStore: ChannelStore,
     onToggle: (Int, Boolean) -> Unit,
-    onTimerClick: (Int) -> Unit
+    onTimerSet: (Int, Int, Boolean) -> Unit
 ) {
     val channels = (0 until Protocol.RELAY_COUNT).filter { it != Protocol.RELAY_CH_FAN }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -812,12 +813,14 @@ private fun RelaysGrid(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 RelayTile(
                     channels[i], states, timers, enabled, channelStore,
-                    onToggle, onTimerClick
+                    onToggle,
+                    onTimerSet = { minutes, active -> onTimerSet(channels[i], minutes, active) }
                 )
                 if (i + 1 < channels.size) {
                     RelayTile(
                         channels[i + 1], states, timers, enabled, channelStore,
-                        onToggle, onTimerClick
+                        onToggle,
+                        onTimerSet = { minutes, active -> onTimerSet(channels[i + 1], minutes, active) }
                     )
                 }
             }
@@ -833,12 +836,13 @@ private fun RowScope.RelayTile(
     enabled: Boolean,
     channelStore: ChannelStore,
     onToggle: (Int, Boolean) -> Unit,
-    onTimerClick: (Int) -> Unit
+    onTimerSet: (Int, Boolean) -> Unit
 ) {
     val colors = LocalAppColors.current
     val on = states.getOrElse(channel) { false }
     val icon = ChannelCatalog.byKey(channelStore.iconKey(channel))
     val timer = timers[channel]
+    var timerMenuOpen by remember { mutableStateOf(false) }
     GlassCard(
         modifier = Modifier
             .weight(1f)
@@ -880,48 +884,50 @@ private fun RowScope.RelayTile(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                if (timer != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(colors.glassFill)
-                            .clickable(enabled = enabled) { onTimerClick(channel) }
-                            .padding(start = 8.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Timer,
-                            contentDescription = "Timer",
-                            tint = IosOrange,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = "${timer.minutes}m",
-                            color = IosOrange,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        IconButton(
-                            onClick = { onTimerClick(channel) },
-                            modifier = Modifier.size(22.dp)
+                Box {
+                    if (timer != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(colors.glassFill)
+                                .clickable(enabled = enabled) { timerMenuOpen = true }
+                                .padding(start = 8.dp, end = 10.dp, top = 3.dp, bottom = 3.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Edit timer",
-                                tint = colors.textSecondary,
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = "Timer",
+                                tint = IosOrange,
                                 modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "${timer.minutes}m",
+                                color = IosOrange,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { timerMenuOpen = true },
+                            enabled = enabled
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = "Set timer",
+                                tint = if (enabled) colors.textTertiary else colors.textTertiary.copy(alpha = 0.40f)
                             )
                         }
                     }
-                } else {
-                    IconButton(onClick = { onTimerClick(channel) }) {
-                        Icon(
-                            imageVector = Icons.Filled.Timer,
-                            contentDescription = "Set timer",
-                            tint = if (enabled) colors.textTertiary else colors.textTertiary.copy(alpha = 0.40f)
-                        )
-                    }
+                    TimerQuickAddMenu(
+                        expanded = timerMenuOpen,
+                        onDismiss = { timerMenuOpen = false },
+                        channelName = channelStore.name(channel),
+                        timer = timer,
+                        enabled = enabled,
+                        onSet = onTimerSet
+                    )
                 }
                 Switch(
                     checked = on,
@@ -979,11 +985,12 @@ private fun FanCard(
     iconKey: String,
     timer: Protocol.TimerInfo?,
     onToggle: (Boolean) -> Unit,
-    onTimerClick: () -> Unit,
+    onTimerSet: (Int, Boolean) -> Unit,
     onSetSpeed: (Int) -> Unit
 ) {
     val colors = LocalAppColors.current
     val icon = ChannelCatalog.byKey(iconKey)
+    var timerMenuOpen by remember { mutableStateOf(false) }
     GlassCard(
         modifier = Modifier
             .fillMaxWidth()
@@ -1030,49 +1037,52 @@ private fun FanCard(
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium
                 )
-                if (timer != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(colors.glassFill)
-                            .clickable(enabled = enabled) { onTimerClick() }
-                            .padding(start = 8.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Timer,
-                            contentDescription = "Timer",
-                            tint = IosOrange,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = "${timer.minutes}m",
-                            color = IosOrange,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Edit timer",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(13.dp)
-                        )
+                Box {
+                    if (timer != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(colors.glassFill)
+                                .clickable(enabled = enabled) { timerMenuOpen = true }
+                                .padding(start = 8.dp, end = 10.dp, top = 4.dp, bottom = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = "Timer",
+                                tint = IosOrange,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "${timer.minutes}m",
+                                color = IosOrange,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { timerMenuOpen = true },
+                            enabled = enabled,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Timer,
+                                contentDescription = "Set fan timer",
+                                tint = colors.textTertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
-                } else {
-                    IconButton(
-                        onClick = onTimerClick,
+                    TimerQuickAddMenu(
+                        expanded = timerMenuOpen,
+                        onDismiss = { timerMenuOpen = false },
+                        channelName = name,
+                        timer = timer,
                         enabled = enabled,
-                        modifier = Modifier.size(34.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Timer,
-                            contentDescription = "Set fan timer",
-                            tint = colors.textTertiary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                        onSet = onTimerSet
+                    )
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -1275,67 +1285,102 @@ private fun DrawScope.drawFanDial(
 }
 
 @Composable
-private fun TimerDialog(
-    channel: Int,
+private fun TimerQuickAddMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
     channelName: String,
     timer: Protocol.TimerInfo?,
-    onSet: (Int, Boolean) -> Unit,
-    onDismiss: () -> Unit
+    enabled: Boolean,
+    onSet: (Int, Boolean) -> Unit
 ) {
     val colors = LocalAppColors.current
-    var minutes by remember { mutableStateOf((timer?.minutes ?: 15).toString()) }
-    val parsed = minutes.toIntOrNull()
-    AlertDialog(
+    val current = timer?.minutes ?: 0
+    DropdownMenu(
+        expanded = expanded,
         onDismissRequest = onDismiss,
         containerColor = colors.menuBackground,
-        title = {
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
             Text(
                 text = "Off timer — $channelName",
-                color = colors.textPrimary
+                color = colors.textPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
             )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Turn this channel off after N minutes. Timers reset when the controller loses power.",
-                    color = colors.textSecondary,
-                    fontSize = 13.sp
-                )
-                OutlinedTextField(
-                    value = minutes,
-                    onValueChange = { minutes = it.filter { c -> c.isDigit() }.take(4) },
-                    singleLine = true,
-                    label = { Text("Minutes", color = colors.textTertiary) },
-                    textStyle = LocalTextStyle.current.copy(color = colors.textPrimary),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = colors.textPrimary,
-                        unfocusedTextColor = colors.textPrimary,
-                        focusedBorderColor = colors.glassBorder,
-                        unfocusedBorderColor = colors.glassBorder,
-                        cursorColor = colors.textPrimary
-                    )
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (parsed != null && parsed > 0) onSet(parsed, true)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = if (timer != null) {
+                    "Turns off in ${timer.minutes} min — tap to add more"
+                } else {
+                    "No timer running — tap to add"
                 },
-                enabled = parsed != null && parsed > 0,
-                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
-            ) {
-                Text("Start")
-            }
-        },
-        dismissButton = {
-            if (timer != null) {
-                TextButton(
-                    onClick = { onSet(minutes.toIntOrNull() ?: 0, false) },
-                    colors = ButtonDefaults.textButtonColors(contentColor = colors.textSecondary)
-                ) {
-                    Text("Cancel")
+                color = if (timer != null) IosOrange else colors.textTertiary,
+                fontSize = 12.sp
+            )
+        }
+        QuickAddItem("+5 min", enabled && current + 5 <= 9999) { onSet(current + 5, true) }
+        QuickAddItem("+15 min", enabled && current + 15 <= 9999) { onSet(current + 15, true) }
+        QuickAddItem("+30 min", enabled && current + 30 <= 9999) { onSet(current + 30, true) }
+        QuickAddItem("+1 hr", enabled && current + 60 <= 9999) { onSet(current + 60, true) }
+        if (timer != null) {
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(colors.glassBorder.copy(alpha = 0.50f))
+            )
+            DropdownMenuItem(
+                onClick = {
+                    onSet(0, false)
+                    onDismiss()
+                },
+                text = {
+                    Text(
+                        text = "Cancel timer",
+                        color = colors.textSecondary,
+                        fontSize = 14.sp
+                    )
                 }
+            )
+        }
+        DropdownMenuItem(
+            onClick = onDismiss,
+            text = {
+                Text(
+                    text = "Done",
+                    color = colors.textTertiary,
+                    fontSize = 14.sp
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun QuickAddItem(label: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = LocalAppColors.current
+    DropdownMenuItem(
+        onClick = onClick,
+        enabled = enabled,
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    tint = IosGreen,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    color = colors.textPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     )
@@ -1456,6 +1501,397 @@ private fun ConnectCard(connecting: Boolean, onConnect: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun TimeRulesCard(
+    rules: List<Protocol.TimeRule>,
+    deviceEpoch: Long,
+    timeSynced: Boolean,
+    enabled: Boolean,
+    channelStore: ChannelStore,
+    onSetRule: (Protocol.TimeRule) -> Unit,
+    onSyncClock: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    val used = rules.filter { !it.isDefault() }
+    var showAdd by remember { mutableStateOf(false) }
+
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Time Rules",
+                        color = colors.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (!timeSynced) {
+                                "Clock not synced — rules fire after the phone connects"
+                            } else {
+                                "Controller time " +
+                                    "%02d:%02d".format(deviceEpoch / 3600 % 24, deviceEpoch % 3600 / 60)
+                            },
+                            color = if (timeSynced) colors.textTertiary else IosOrange,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (enabled) {
+                            TextButton(
+                                onClick = onSyncClock,
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = null,
+                                    tint = colors.textSecondary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "Sync clock",
+                                    color = colors.textSecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+                if (enabled && used.size < Protocol.RULE_COUNT) {
+                    OutlinedButton(
+                        onClick = { showAdd = true },
+                        modifier = Modifier.height(38.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, colors.glassBorder),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = colors.buttonFill,
+                            contentColor = colors.textPrimary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = null,
+                            tint = IosGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Add rule", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            if (used.isEmpty()) {
+                Text(
+                    text = "No rules yet. Example: turn Light 1 OFF at 9:00 — e.g. for the " +
+                        "morning sunlight once the sun is up.",
+                    color = colors.textTertiary,
+                    fontSize = 12.sp
+                )
+            } else {
+                used.forEach { rule ->
+                    RuleRow(
+                        rule = rule,
+                        enabled = enabled,
+                        channelStore = channelStore,
+                        onSetRule = onSetRule
+                    )
+                }
+            }
+        }
+    }
+    if (showAdd) {
+        AddRuleDialog(
+            channelStore = channelStore,
+            onSave = { draft ->
+                val slot = rules.indexOfFirst { it.isDefault() }
+                if (slot in 0 until Protocol.RULE_COUNT) {
+                    onSetRule(draft.copy(index = slot))
+                }
+                showAdd = false
+            },
+            onDismiss = { showAdd = false }
+        )
+    }
+}
+
+private fun ruleDaysLabel(days: Int): String = when (days) {
+    0 -> "Daily"
+    else -> {
+        val names = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        when (days) {
+            0b0011111 -> "Mon–Fri"
+            0b1100000 -> "Weekends"
+            else -> names.filterIndexed { i, _ -> days and (1 shl i) != 0 }.joinToString(" ")
+        }
+    }
+}
+
+@Composable
+private fun RuleRow(
+    rule: Protocol.TimeRule,
+    enabled: Boolean,
+    channelStore: ChannelStore,
+    onSetRule: (Protocol.TimeRule) -> Unit
+) {
+    val colors = LocalAppColors.current
+    val on = rule.action == Protocol.RULE_ACTION_ON
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = ChannelCatalog.byKey(channelStore.iconKey(rule.channel)).icon,
+            contentDescription = null,
+            tint = if (on) IosGreen else colors.textTertiary,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = channelStore.name(rule.channel),
+                color = colors.textPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${if (on) "ON" else "OFF"} at %02d:%02d · %s"
+                    .format(rule.hour, rule.minute, ruleDaysLabel(rule.days)),
+                color = if (rule.enabled) colors.textSecondary else colors.textTertiary,
+                fontSize = 12.sp
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Switch(
+            checked = rule.enabled,
+            onCheckedChange = { onSetRule(rule.copy(enabled = it)) },
+            enabled = enabled,
+            modifier = Modifier.scale(0.8f),
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.White,
+                checkedTrackColor = IosGreen,
+                uncheckedThumbColor = colors.switchOffThumb,
+                uncheckedTrackColor = colors.switchOffTrack,
+                uncheckedBorderColor = Color.Transparent,
+                disabledCheckedThumbColor = Color.White.copy(alpha = 0.60f),
+                disabledCheckedTrackColor = IosGreen.copy(alpha = 0.45f),
+                disabledUncheckedThumbColor = colors.switchOffThumb.copy(alpha = 0.50f),
+                disabledUncheckedTrackColor = colors.switchOffTrack.copy(alpha = 0.50f)
+            )
+        )
+        IconButton(
+            onClick = {
+                onSetRule(rule.copy(enabled = false, channel = 0, action = Protocol.RULE_ACTION_OFF,
+                    hour = 0, minute = 0, days = 0))
+            },
+            enabled = enabled,
+            modifier = Modifier.size(30.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = "Delete rule",
+                tint = colors.textTertiary,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun Chip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) colors.segmentedActiveFill else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) colors.textPrimary else colors.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AddRuleDialog(
+    channelStore: ChannelStore,
+    onSave: (Protocol.TimeRule) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalAppColors.current
+    var channel by remember { mutableStateOf(1) }
+    var action by remember { mutableStateOf(Protocol.RULE_ACTION_OFF) }
+    var hourStr by remember { mutableStateOf("09") }
+    var minStr by remember { mutableStateOf("00") }
+    var days by remember { mutableStateOf(0) }
+    val hour = hourStr.toIntOrNull()
+    val minute = minStr.toIntOrNull()
+    val valid = hour != null && hour in 0..23 && minute != null && minute in 0..59
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.menuBackground,
+        title = { Text("New rule", color = colors.textPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "At the set time the controller turns the channel on/off. " +
+                        "Rules live on the controller, survive reboots, and only fire " +
+                        "when the clock is synced.",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    (0 until Protocol.RELAY_COUNT).forEach { ch ->
+                        Chip(
+                            label = channelStore.name(ch),
+                            selected = channel == ch,
+                            onClick = { channel = ch }
+                        )
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Action",
+                        color = colors.textTertiary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    SingleChoiceSegmentedButtonRow {
+                        SegmentedButton(
+                            selected = action == Protocol.RULE_ACTION_OFF,
+                            onClick = { action = Protocol.RULE_ACTION_OFF },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = colors.segmentedActiveFill,
+                                activeContentColor = colors.textPrimary,
+                                inactiveContainerColor = Color.Transparent,
+                                inactiveContentColor = colors.textSecondary
+                            )
+                        ) { Text("OFF", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                        SegmentedButton(
+                            selected = action == Protocol.RULE_ACTION_ON,
+                            onClick = { action = Protocol.RULE_ACTION_ON },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = colors.segmentedActiveFill,
+                                activeContentColor = colors.textPrimary,
+                                inactiveContainerColor = Color.Transparent,
+                                inactiveContentColor = colors.textSecondary
+                            )
+                        ) { Text("ON", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Time",
+                        color = colors.textTertiary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = hourStr,
+                        onValueChange = { hourStr = it.filter { c -> c.isDigit() }.take(2) },
+                        singleLine = true,
+                        modifier = Modifier.width(64.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = colors.textPrimary,
+                            textAlign = TextAlign.Center
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = colors.textPrimary,
+                            unfocusedTextColor = colors.textPrimary,
+                            focusedBorderColor = colors.glassBorder,
+                            unfocusedBorderColor = colors.glassBorder,
+                            cursorColor = colors.textPrimary
+                        )
+                    )
+                    Text(
+                        text = ":",
+                        color = colors.textPrimary,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp)
+                    )
+                    OutlinedTextField(
+                        value = minStr,
+                        onValueChange = { minStr = it.filter { c -> c.isDigit() }.take(2) },
+                        singleLine = true,
+                        modifier = Modifier.width(64.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = colors.textPrimary,
+                            textAlign = TextAlign.Center
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = colors.textPrimary,
+                            unfocusedTextColor = colors.textPrimary,
+                            focusedBorderColor = colors.glassBorder,
+                            unfocusedBorderColor = colors.glassBorder,
+                            cursorColor = colors.textPrimary
+                        )
+                    )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Chip("Every day", selected = days == 0, onClick = { days = 0 })
+                    val dayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                    dayNames.forEachIndexed { i, name ->
+                        Chip(
+                            label = name,
+                            selected = days and (1 shl i) != 0,
+                            onClick = { days = days xor (1 shl i) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onSave(
+                        Protocol.TimeRule(
+                            index = 0,
+                            enabled = true,
+                            channel = channel,
+                            action = action,
+                            hour = hour!!,
+                            minute = minute!!,
+                            days = days
+                        )
+                    )
+                },
+                enabled = valid,
+                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = colors.textSecondary)
+            ) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

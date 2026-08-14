@@ -21,6 +21,11 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         val timers: Map<Int, Protocol.TimerInfo> = emptyMap(),
         val fanLevel: Int = 1,
         val fanBusy: Boolean = false,
+        val rules: List<Protocol.TimeRule> = (0 until Protocol.RULE_COUNT).map {
+            Protocol.TimeRule(it, false, 0, Protocol.RULE_ACTION_OFF, 0, 0, 0)
+        },
+        val deviceEpoch: Long = 0,
+        val timeSynced: Boolean = false,
         val otaProgress: Float? = null,
         val otaStatus: String? = null,
         val error: String? = null
@@ -93,7 +98,10 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                         restoreMode = s.restoreMode,
                         timers = s.timers,
                         fanLevel = s.fanLevel,
-                        fanBusy = s.fanBusy
+                        fanBusy = s.fanBusy,
+                        rules = s.rules,
+                        deviceEpoch = s.deviceEpoch,
+                        timeSynced = s.timeSynced
                     )
                 }
             }
@@ -155,6 +163,30 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         }
         _state.update { it.copy(fanLevel = level, fanBusy = true) }
         RelayHolder.setFanSpeed(level)
+    }
+
+    fun setRule(rule: Protocol.TimeRule) {
+        if (!_state.value.connected) {
+            _state.update { it.copy(error = "Connect to ${Protocol.DEVICE_NAME} to set rules") }
+            return
+        }
+        // The controller answers with the full list (0xB0), which reconciles
+        // any optimistic edit.
+        RelayHolder.setRule(rule)
+    }
+
+    fun refreshRules() {
+        RelayHolder.requestRules()
+    }
+
+    fun syncClock() {
+        if (!_state.value.connected) {
+            _state.update { it.copy(error = "Connect to ${Protocol.DEVICE_NAME} to sync the clock") }
+            return
+        }
+        RelayHolder.syncEpoch()
+        RelayHolder.requestTime()
+        RelayHolder.requestRules()
     }
 
     fun disconnect() {

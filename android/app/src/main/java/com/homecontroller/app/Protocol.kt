@@ -22,6 +22,9 @@ object Protocol {
     const val CMD_OTA_END: Byte = 0x09
     const val CMD_SET_FAN_SPEED: Byte = 0x0A
     const val CMD_GET_FAN_SPEED: Byte = 0x0B
+    const val CMD_GET_RULES: Byte = 0x0C
+    const val CMD_SET_RULE: Byte = 0x0D
+    const val CMD_GET_TIME: Byte = 0x0E
 
     const val RSP_SET_OK: Byte = 0xA2.toByte()
     const val RSP_GET_ALL: Byte = 0xA4.toByte()
@@ -35,6 +38,8 @@ object Protocol {
     const val RSP_OTA_CRC_ERR: Byte = 0xAB.toByte()
     const val RSP_FAN_SPEED: Byte = 0xAE.toByte()
     const val RSP_FAN_BUSY: Byte = 0xAF.toByte()
+    const val RSP_RULES: Byte = 0xB0.toByte()
+    const val RSP_TIME: Byte = 0xB2.toByte()
 
     const val FAN_LEVELS = 6
     const val FAN_LEVEL_BOOST = 6
@@ -135,5 +140,63 @@ object Protocol {
     fun parseFanBusy(data: ByteArray): Boolean? {
         if (data.size != 2) return null
         return data[1] == 1.toByte()
+    }
+
+    const val RULE_COUNT = 8
+    const val RULE_ACTION_OFF = 0
+    const val RULE_ACTION_ON = 1
+
+    data class TimeRule(
+        val index: Int,
+        val enabled: Boolean,
+        val channel: Int,
+        val action: Int,
+        val hour: Int,
+        val minute: Int,
+        val days: Int // bit0=Mon..bit6=Sun, 0 = every day
+    ) {
+        fun isDefault() = !enabled && channel == 0 && action == RULE_ACTION_OFF &&
+            hour == 0 && minute == 0 && days == 0
+    }
+
+    val getRulesPacket: ByteArray = byteArrayOf(CMD_GET_RULES)
+
+    fun setRulePacket(rule: TimeRule): ByteArray =
+        byteArrayOf(
+            CMD_SET_RULE,
+            rule.index.toByte(),
+            if (rule.enabled) 1 else 0,
+            rule.channel.toByte(),
+            rule.action.toByte(),
+            rule.hour.toByte(),
+            rule.minute.toByte(),
+            rule.days.toByte()
+        )
+
+    fun parseRules(data: ByteArray): List<TimeRule>? {
+        if (data.size != 1 + RULE_COUNT * 6) return null
+        return (0 until RULE_COUNT).map { i ->
+            val o = 1 + i * 6
+            TimeRule(
+                index = i,
+                enabled = data[o] == 1.toByte(),
+                channel = data[o + 1].toInt(),
+                action = data[o + 2].toInt(),
+                hour = data[o + 3].toInt(),
+                minute = data[o + 4].toInt(),
+                days = data[o + 5].toInt()
+            )
+        }
+    }
+
+    val getTimePacket: ByteArray = byteArrayOf(CMD_GET_TIME)
+
+    fun parseTime(data: ByteArray): Pair<Long, Boolean>? {
+        if (data.size != 6) return null
+        val epoch = (data[1].toLong() and 0xFF) or
+            ((data[2].toLong() and 0xFF) shl 8) or
+            ((data[3].toLong() and 0xFF) shl 16) or
+            ((data[4].toLong() and 0xFF) shl 24)
+        return epoch to (data[5] == 1.toByte())
     }
 }

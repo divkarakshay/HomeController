@@ -19,7 +19,12 @@ object RelayHolder {
         val restoreMode: Int = Protocol.MODE_RESTORE_LAST,
         val timers: Map<Int, Protocol.TimerInfo> = emptyMap(),
         val fanLevel: Int = 1,
-        val fanBusy: Boolean = false
+        val fanBusy: Boolean = false,
+        val rules: List<Protocol.TimeRule> = (0 until Protocol.RULE_COUNT).map {
+            Protocol.TimeRule(it, false, 0, Protocol.RULE_ACTION_OFF, 0, 0, 0)
+        },
+        val deviceEpoch: Long = 0,
+        val timeSynced: Boolean = false
     )
 
     interface Events {
@@ -61,6 +66,8 @@ object RelayHolder {
                         requestRestoreMode()
                         syncEpoch()
                         requestFanSpeed()
+                        requestRules()
+                        requestTime()
                     }, 150)
                     refreshWidgets()
                     events?.onConnected()
@@ -108,6 +115,15 @@ object RelayHolder {
                 override fun onFanBusy(busy: Boolean) {
                     _state.update { it.copy(fanBusy = busy) }
                     refreshWidgets()
+                }
+
+                override fun onRules(rules: List<Protocol.TimeRule>) {
+                    _state.update { it.copy(rules = rules) }
+                    refreshWidgets()
+                }
+
+                override fun onTime(epochSeconds: Long, synced: Boolean) {
+                    _state.update { it.copy(deviceEpoch = epochSeconds, timeSynced = synced) }
                 }
 
                 override fun onOtaStatus(status: String, crcMismatch: Boolean) {
@@ -168,6 +184,22 @@ object RelayHolder {
 
     fun requestFanSpeed() {
         manager?.requestFanSpeed()
+    }
+
+    fun requestRules() {
+        manager?.requestRules()
+    }
+
+    fun syncEpoch() {
+        manager?.syncEpoch()
+    }
+
+    fun setRule(rule: Protocol.TimeRule) {
+        manager?.setRule(rule)
+    }
+
+    fun requestTime() {
+        manager?.requestTime()
     }
 
     fun startOta(size: Int) = manager?.startOta(size)

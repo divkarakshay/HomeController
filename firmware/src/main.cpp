@@ -17,12 +17,16 @@
 //   [0x03, mode]                    -> set power-restore mode (0=last state, 1=all off)
 //   [0x04]                          -> request power-restore mode
 //   [0x05, ch, minHi, minLo, on]    -> start (on=1) or cancel (on=0) an off-timer
-//   [0x06, b0..b3 LSB first]        -> sync wall-clock epoch seconds (for later uses)
+//   [0x06, b0..b3 LSB first]        -> sync wall-clock epoch seconds (LOCAL time; gating rules)
 //   [0x07, sz0..sz3 LE]             -> begin OTA upload (target app slot size)
 //   [0x08, seq0, seq1, data...]     -> OTA chunk (16 data bytes, seq from 0)
 //   [0x09, crc0..crc3 LE]           -> finish OTA, verify CRC-32, reboot on success
 //   [0x0A, level]                   -> set fan speed level 1-6 (6 = boost)
 //   [0x0B]                          -> request current fan speed level
+//   [0x0C]                          -> request all time rules
+//   [0x0D, idx, en, ch, act, h, m, days]
+//                                   -> set time rule (days bit0=Mon..bit6=Sun, 0 = every day)
+//   [0x0E]                          -> request controller clock (epoch + synced flag)
 // Response packets notified on STATUS_CHAR:
 //   [0xA2, channel, state]          -> set command applied
 //   [0xA4, s0..s7]                  -> get-all response (also pushed on subscribe)
@@ -37,6 +41,8 @@
 //   [0xAD, seq0, seq1]              -> OTA chunk acked (seq 0, every 16th, last)
 //   [0xAE, level]                   -> fan speed level (echo when cycling completes / on request)
 //   [0xAF, 0/1]                     -> fan speed cycling busy state changed
+//   [0xB0, 8 x 6-byte rules]        -> time rules list (also pushed after a rule set)
+//   [0xB2, epoch 4B LE, synced]     -> controller clock
 static const uint8_t CMD_SET       = 0x01;
 static const uint8_t CMD_GET       = 0x02;
 static const uint8_t CMD_SET_MODE  = 0x03;
@@ -61,12 +67,18 @@ static const uint8_t RSP_OTA_RESEND = 0xAC;
 static const uint8_t RSP_OTA_ACK   = 0xAD;
 static const uint8_t RSP_FAN_SPEED = 0xAE;
 static const uint8_t RSP_FAN_BUSY  = 0xAF;
+static const uint8_t RSP_RULES     = 0xB0;
+static const uint8_t RSP_TIME      = 0xB2;
 static const uint8_t RSP_ERR_CMD   = 0xE1;
 static const uint8_t RSP_ERR_CH    = 0xE2;
 
+static const uint8_t CMD_GET_RULES = 0x0C;
+static const uint8_t CMD_SET_RULE  = 0x0D;
+static const uint8_t CMD_GET_TIME  = 0x0E;
+
 static const uint8_t RESTORE_LAST   = 0;
 static const uint8_t RESTORE_ALL_OFF = 1;
-static const char FW_VERSION[] = "v2.1-fan";
+static const char FW_VERSION[] = "v2.2-rules";
 
 enum FanPhase {
   FAN_IDLE = 0,
@@ -86,7 +98,39 @@ static uint32_t g_switchSince[RELAY_COUNT] = {0};
 // otherwise millis() deadline when the relay must turn off.
 static uint32_t g_timerEnd[RELAY_COUNT] = {0};
 
-static uint32_t g_epoch = 0;
+// ---- Wall-clock (set by the phone) ----
+// The phone pushes epoch seconds (local time) over BLE on every connect
+// (CMD_SET_EPOCH). We deliberately do NOT persist it: after a power cut the
+// stored value would be stale, and rules must never fire against the wrong
+// clock - so time is simply "unknown" until the next connect, which is also
+// when it gets re-synced. g_timeSynced gates rules and the time readout.
+static uint32_t g_epochSec = 0;
+static uint32_t g_epochBootMs = 0;
+static bool g_timeSynced = false;
+
+uint32_t nowSec() {
+  if (!g_timeSynced) return 0;
+  return g_epochSec + (millis() - g_epochBootMs) / 1000;
+}
+
+// ---- Time rules ----
+// Up to 8 daily rules, persisted in NVS: at the given local HH:MM (matching
+// the day mask) the channel is turned on/off. "days" is a bitmask with
+// bit0=Mon .. bit6=Sun; 0 means every day. Rules only fire while the clock
+// is synced.
+#define RULE_COUNT 8
+
+typedef struct {
+  uint8_t enabled;
+  uint8_t channel;  // 0..7
+  uint8_t action;   // 0 = off, 1 = on
+  uint8_t hour;     // 0..23
+  uint8_t minute;   // 0..59
+  uint8_t days;     // bit0=Mon..bit6=Sun, 0 = every day
+} TimeRule;
+
+static TimeRule g_rules[RULE_COUNT];
+static uint32_t g_lastRuleMinute = 0;
 
 // --- BLE OTA state ---
 static const uint16_t OTA_CHUNK_SIZE = 16;
@@ -234,6 +278,55 @@ uint16_t timerMinutesLeft(uint8_t ch) {
   if (!timerActive(ch)) return 0;
   int32_t ms = (int32_t)(g_timerEnd[ch] - millis());
   return ms > 0 ? (uint16_t)((ms + 59999) / 60000) : 0;
+}
+
+void loadRulesFromNvs() {
+  size_t got = g_prefs.getBytes("rules", g_rules, sizeof(g_rules));
+  if (got != sizeof(g_rules)) memset(g_rules, 0, sizeof(g_rules));
+}
+
+void saveRulesToNvs() {
+  g_prefs.putBytes("rules", g_rules, sizeof(g_rules));
+}
+
+void applyRule(uint8_t ch, uint8_t action) {
+  if (g_states[ch] == action) return;  // already in the desired state
+  if (ch == RELAY_CH_FAN) fanAbort();  // rules override speed cycling like a switch
+  setRelay(ch, action != 0);
+  saveStatesToNvs();
+  uint8_t out[3] = {RSP_STATE_CHANGED, ch, g_states[ch]};
+  notify(out, 3);
+  Serial.printf("[RULE] ch%u -> %s\n", ch, action ? "ON" : "OFF");
+}
+
+void rulesTick() {
+  if (!g_timeSynced) return;
+  uint32_t now = nowSec();
+  uint32_t minute = now / 60;
+  if (minute == g_lastRuleMinute) return;
+  g_lastRuleMinute = minute;
+
+  uint8_t hour = (uint8_t)((now / 3600) % 24);
+  uint8_t mins = (uint8_t)((now % 3600) / 60);
+  // epoch 0 = 1970-01-01 = Thursday; bit0=Mon, so weekday index = (days+3)%7
+  uint8_t wdBit = (uint8_t)(1u << (((now / 86400) % 7) + 3) % 7);
+
+  for (uint8_t i = 0; i < RULE_COUNT; i++) {
+    TimeRule* r = &g_rules[i];
+    if (!r->enabled || r->channel >= RELAY_COUNT) continue;
+    if (r->days != 0 && (r->days & wdBit) == 0) continue;
+    if (r->hour == hour && r->minute == mins) {
+      applyRule(r->channel, r->action);
+      Serial.printf("[RULE] %02u:%02u wd=%02X rule%u matched\n",
+                    (unsigned)hour, (unsigned)mins, (unsigned)wdBit, (unsigned)i);
+    }
+  }
+}
+
+void respondRules(uint8_t* out, size_t& len) {
+  out[0] = RSP_RULES;
+  memcpy(out + 1, g_rules, sizeof(g_rules));
+  len = 1 + sizeof(g_rules);
 }
 
 // ---- Atomberg-style fan speed cycling ----
@@ -403,7 +496,7 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
 
     const uint8_t* d = (const uint8_t*)value.data();
     size_t n = value.size();
-    uint8_t out[1 + RELAY_COUNT] = {0};
+    uint8_t out[1 + RULE_COUNT * sizeof(TimeRule)] = {0};  // rules response is the largest
     size_t outLen = 0;
 
     // Throttle console chatter: only log control commands and rare events.
@@ -470,13 +563,59 @@ class WriteCallbacks : public NimBLECharacteristicCallbacks {
 
       case CMD_SET_EPOCH:
         if (n != 5) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
-        g_epoch = (uint32_t)d[1] | ((uint32_t)d[2] << 8) | ((uint32_t)d[3] << 16) | ((uint32_t)d[4] << 24);
-        g_prefs.putUInt("epoch", g_epoch);
+        // Epoch seconds in LOCAL time, anchored to this boot. Not persisted:
+        // a stale clock after a power cut would fire rules at the wrong time.
+        g_epochSec = (uint32_t)d[1] | ((uint32_t)d[2] << 8) | ((uint32_t)d[3] << 16) | ((uint32_t)d[4] << 24);
+        g_epochBootMs = millis();
+        g_timeSynced = true;
+        g_lastRuleMinute = 0xFFFFFFFF;  // allow a rule scheduled "this minute" to fire
         out[0] = RSP_SET_OK;
         out[1] = 0xFF;
         out[2] = 0;
         outLen = 3;
-        Serial.printf("[TIME] epoch synced to %lu\n", (unsigned long)g_epoch);
+        Serial.printf("[TIME] epoch synced to %lu\n", (unsigned long)g_epochSec);
+        break;
+
+      case CMD_GET_RULES:
+        if (n != 1) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
+        respondRules(out, outLen);
+        break;
+
+      case CMD_SET_RULE:
+        if (n != 8 || d[1] >= RULE_COUNT || d[2] > 1 || d[3] >= RELAY_COUNT ||
+            d[4] > 1 || d[5] > 23 || d[6] > 59) {
+          out[0] = RSP_ERR_CMD;
+          outLen = 1;
+          break;
+        }
+        {
+          TimeRule* r = &g_rules[d[1]];
+          r->enabled = d[2];
+          r->channel = d[3];
+          r->action = d[4];
+          r->hour = d[5];
+          r->minute = d[6];
+          r->days = d[7];
+          saveRulesToNvs();
+          respondRules(out, outLen);
+          Serial.printf("[RULE] rule%u %s ch%u %s %02u:%02u days=%02X\n",
+                        d[1], d[2] ? "enabled" : "disabled", d[3],
+                        d[4] ? "ON" : "OFF", d[5], d[6], d[7]);
+        }
+        break;
+
+      case CMD_GET_TIME:
+        if (n != 1) { out[0] = RSP_ERR_CMD; outLen = 1; break; }
+        {
+          uint32_t t = nowSec();
+          out[0] = RSP_TIME;
+          out[1] = t & 0xFF;
+          out[2] = (t >> 8) & 0xFF;
+          out[3] = (t >> 16) & 0xFF;
+          out[4] = (t >> 24) & 0xFF;
+          out[5] = g_timeSynced ? 1 : 0;
+          outLen = 6;
+        }
         break;
 
       case CMD_SET_FAN_SPEED:
@@ -640,6 +779,8 @@ void setup() {
   saveStatesToNvs();
   Serial.println("[SWITCH] manual switches initialized");
 
+  loadRulesFromNvs();
+
   NimBLEDevice::init(BLE_DEVICE_NAME);
   NimBLEDevice::setPower(ESP_PWR_LVL_P7);
 
@@ -672,6 +813,7 @@ void loop() {
   handleSwitches();
   handleTimers();
   fanTick();
+  rulesTick();
   if (g_otaActive && millis() - g_otaLastChunkMs > OTA_STALL_TIMEOUT_MS) {
     g_otaActive = false;
     Update.abort();

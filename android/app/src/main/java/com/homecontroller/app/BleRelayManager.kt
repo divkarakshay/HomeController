@@ -20,6 +20,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
+import java.util.TimeZone
 
 class BleRelayManager(private val context: Context) {
 
@@ -32,6 +33,8 @@ class BleRelayManager(private val context: Context) {
         fun onTimer(timer: Protocol.TimerInfo) {}
         fun onFanSpeed(level: Int) {}
         fun onFanBusy(busy: Boolean) {}
+        fun onRules(rules: List<Protocol.TimeRule>) {}
+        fun onTime(epochSeconds: Long, synced: Boolean) {}
         fun onOtaStatus(status: String, crcMismatch: Boolean) {}
         fun onOtaAck(seq: Int) {}
         fun onOtaResendFrom(seq: Int) {}
@@ -199,8 +202,27 @@ class BleRelayManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun syncEpoch() {
-        val epoch = System.currentTimeMillis() / 1000
-        writeChar?.let { write(it, Protocol.epochPacket(epoch)) }
+        // Local-time epoch: the controller compares rule times against its own
+        // wall clock, so hand it our local HH:MM (UTC + current tz offset).
+        val now = System.currentTimeMillis()
+        val tzOffset = TimeZone.getDefault().getOffset(now)
+        val localEpoch = (now + tzOffset) / 1000
+        writeChar?.let { write(it, Protocol.epochPacket(localEpoch)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun requestRules() {
+        writeChar?.let { write(it, Protocol.getRulesPacket) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun setRule(rule: Protocol.TimeRule) {
+        writeChar?.let { write(it, Protocol.setRulePacket(rule)) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun requestTime() {
+        writeChar?.let { write(it, Protocol.getTimePacket) }
     }
 
     @SuppressLint("MissingPermission")
@@ -268,15 +290,19 @@ class BleRelayManager(private val context: Context) {
     private fun write(char: BluetoothGattCharacteristic, bytes: ByteArray) {
         val g = gatt ?: return
         Log.d(TAG, "Sending " + bytes.joinToString(" ") { "%02X".format(it) })
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(char, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
-        } else {
+        // writeCharacteristic returns false while the OS GATT write queue is
+        // full. Bursts of quick writes (connect-time sync, timers, rules) are
+        // silently dropped otherwise, so retry until the write is accepted.
+        val deadline = System.currentTimeMillis() + 2000
+        while (true) {
             @Suppress("DEPRECATION")
             char.value = bytes
             @Suppress("DEPRECATION")
             char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            @Suppress("DEPRECATION")
-            g.writeCharacteristic(char)
+            val ok: Boolean = runCatching { g.writeCharacteristic(char) }.getOrDefault(true)
+            if (ok) return
+            if (System.currentTimeMillis() >= deadline) return
+            Thread.sleep(5)
         }
     }
 
@@ -380,6 +406,14 @@ class BleRelayManager(private val context: Context) {
             Protocol.RSP_FAN_BUSY -> {
                 Log.d(TAG, "Fan busy received")
                 Protocol.parseFanBusy(data)?.let { listener?.onFanBusy(it) }
+            }
+            Protocol.RSP_RULES -> {
+                Log.d(TAG, "Rules received")
+                Protocol.parseRules(data)?.let { listener?.onRules(it) }
+            }
+            Protocol.RSP_TIME -> {
+                Log.d(TAG, "Time received")
+                Protocol.parseTime(data)?.let { (epoch, synced) -> listener?.onTime(epoch, synced) }
             }
             Protocol.RSP_OTA_BEGIN -> {
                 Log.d(TAG, "OTA upload started")
