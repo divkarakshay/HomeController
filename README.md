@@ -123,8 +123,8 @@ state (1 = cycling, 0 = idle), `E1` bad command, `E2` bad channel.
 The fan runs off relay CH0 (on/off only), so the only speed control it understands is the
 wall-switch pattern that Atomberg BLDC fans respond to: **turn the relay OFF ~1 s, then ON;
 each OFF-ON cycle steps the fan up one level** (Speed 1→2→…→5→Boost, and Boost wraps back
-to Speed 1). The app's rotary dial (⚡ pill on the fan tile → **Fan Speed**) automates
-exactly that pattern with millisecond precision in the firmware:
+to Speed 1). The app's fan card — a rotary dial merged with the power button —
+automates exactly that pattern with millisecond precision in the firmware:
 
 | Setting | Value |
 |---------|-------|
@@ -134,9 +134,10 @@ exactly that pattern with millisecond precision in the firmware:
 | Power-on warm-up | 3.0 s before the first pulse when the fan was OFF |
 
 - The dial shows the fan's indicator disk — 1–5 green LEDs lit for the speed, all 6 amber
-  for Boost — and snaps with haptic feedback.
-- While cycling, the app shows progress and the dial locks; new requests made mid-cycle
-  are queued and applied when the current cycle finishes.
+  for Boost — and snaps with haptic feedback. The hub is the fan's on/off button.
+- While cycling, the dial shows an orange progress ring, the status line reads
+  "Setting Speed N…" and the dial locks; new requests made mid-cycle are queued
+  and applied when the current cycle finishes.
 - The level is saved in the ESP32's NVS (like the relay states) and restored at boot, so
   the dial is correct after a power cut.
 - Anything that takes direct control of the fan relay aborts the cycle: toggling the
@@ -202,9 +203,12 @@ adb logcat -d | grep -E "BleRelayManager"     # view BLE logs from the app
 ## App usage
 
 - The app auto-connects on launch; status shows **Connected / Connecting… / Offline**.
-- When connected: toggle the 8 tiles (Fan + Light 1–7), **Refresh**, **Disconnect**.
-- The fan tile has a ⚡ **Speed** pill — tap it for the rotary dial to set the fan speed
-  1–5 + Boost (the controller steps the fan relay like the wall-switch trick).
+- When connected: control the fan with the dial card up top, toggle the Light 1–7
+  tiles, **Refresh**, **Disconnect**.
+- The fan card at the top has a rotary dial that sets the fan speed 1–5 + Boost by
+  stepping the fan relay like the wall-switch trick. Drag or tap a notch to pick a
+  speed; tap the hub to turn the fan on/off (the fan is turned on automatically
+  when you pick a speed while it's off).
 - **⋮ → Settings** opens the settings screen with the **Power Restore** mode selector.
 - Bluetooth + location (Android ≤ 10) permissions are requested on first launch.
 - The fan channel currently uses GPIO2 (which also drives the onboard LED — the LED is a

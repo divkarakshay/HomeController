@@ -15,6 +15,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -42,10 +43,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
@@ -84,6 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -98,7 +100,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -215,7 +216,6 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
     var showSettings by rememberSaveable { mutableStateOf(openSettingsInitially) }
     var menuOpen by remember { mutableStateOf(false) }
     var timerChannel by remember { mutableStateOf<Int?>(null) }
-    var fanSpeedOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.bluetoothCheck()
@@ -314,16 +314,26 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                     }
                 }
 
+                FanCard(
+                    on = state.states.getOrElse(Protocol.RELAY_CH_FAN) { false },
+                    level = state.fanLevel,
+                    busy = state.fanBusy,
+                    enabled = state.connected,
+                    name = channelStore.name(Protocol.RELAY_CH_FAN),
+                    iconKey = channelStore.iconKey(Protocol.RELAY_CH_FAN),
+                    timer = state.timers[Protocol.RELAY_CH_FAN],
+                    onToggle = { viewModel.toggleRelay(Protocol.RELAY_CH_FAN, it) },
+                    onTimerClick = { timerChannel = Protocol.RELAY_CH_FAN },
+                    onSetSpeed = viewModel::setFanSpeed
+                )
+
                 RelaysGrid(
                     states = state.states,
                     timers = state.timers,
                     enabled = state.connected,
                     channelStore = channelStore,
-                    fanLevel = state.fanLevel,
-                    fanBusy = state.fanBusy,
                     onToggle = viewModel::toggleRelay,
-                    onTimerClick = { timerChannel = it },
-                    onFanSpeedClick = { fanSpeedOpen = true }
+                    onTimerClick = { timerChannel = it }
                 )
 
                 when {
@@ -347,16 +357,7 @@ fun HomeControllerApp(viewModel: RelayViewModel, openSettingsInitially: Boolean 
                     )
                 }
 
-                if (fanSpeedOpen) {
-                    FanSpeedDialog(
-                        level = state.fanLevel,
-                        busy = state.fanBusy,
-                        fanOn = state.states.getOrElse(Protocol.RELAY_CH_FAN) { false },
-                        enabled = state.connected,
-                        onSet = viewModel::setFanSpeed,
-                        onDismiss = { fanSpeedOpen = false }
-                    )
-                }
+                Spacer(Modifier.height(4.dp))
             }
         }
     }
@@ -802,23 +803,23 @@ private fun RelaysGrid(
     timers: Map<Int, Protocol.TimerInfo>,
     enabled: Boolean,
     channelStore: ChannelStore,
-    fanLevel: Int,
-    fanBusy: Boolean,
     onToggle: (Int, Boolean) -> Unit,
-    onTimerClick: (Int) -> Unit,
-    onFanSpeedClick: () -> Unit
+    onTimerClick: (Int) -> Unit
 ) {
+    val channels = (0 until Protocol.RELAY_COUNT).filter { it != Protocol.RELAY_CH_FAN }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        for (row in 0 until Protocol.RELAY_COUNT step 2) {
+        for (i in channels.indices step 2) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 RelayTile(
-                    row, states, timers, enabled, channelStore,
-                    fanLevel, fanBusy, onToggle, onTimerClick, onFanSpeedClick
+                    channels[i], states, timers, enabled, channelStore,
+                    onToggle, onTimerClick
                 )
-                RelayTile(
-                    row + 1, states, timers, enabled, channelStore,
-                    fanLevel, fanBusy, onToggle, onTimerClick, onFanSpeedClick
-                )
+                if (i + 1 < channels.size) {
+                    RelayTile(
+                        channels[i + 1], states, timers, enabled, channelStore,
+                        onToggle, onTimerClick
+                    )
+                }
             }
         }
     }
@@ -831,11 +832,8 @@ private fun RowScope.RelayTile(
     timers: Map<Int, Protocol.TimerInfo>,
     enabled: Boolean,
     channelStore: ChannelStore,
-    fanLevel: Int,
-    fanBusy: Boolean,
     onToggle: (Int, Boolean) -> Unit,
-    onTimerClick: (Int) -> Unit,
-    onFanSpeedClick: () -> Unit
+    onTimerClick: (Int) -> Unit
 ) {
     val colors = LocalAppColors.current
     val on = states.getOrElse(channel) { false }
@@ -925,30 +923,6 @@ private fun RowScope.RelayTile(
                         )
                     }
                 }
-                if (channel == Protocol.RELAY_CH_FAN) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(colors.glassFill)
-                            .clickable(enabled = enabled) { onFanSpeedClick() }
-                            .padding(horizontal = 10.dp, vertical = 7.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Bolt,
-                            contentDescription = "Fan speed",
-                            tint = if (fanBusy) IosOrange else IosGreen,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            text = if (fanLevel == Protocol.FAN_LEVEL_BOOST) "Boost" else "Speed $fanLevel",
-                            color = if (fanBusy) IosOrange else colors.textPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
                 Switch(
                     checked = on,
                     onCheckedChange = { onToggle(channel, it) },
@@ -970,10 +944,11 @@ private fun RowScope.RelayTile(
     }
 }
 
-// ---- Fan speed rotary dial (Atomberg-style) ----
-// Six levels on a 60°-spaced circle: Speed 1-5 plus Boost. The needle snaps to
-// the nearest notch while dragging; releasing commits the speed, which the
-// controller applies by cycling the fan relay (OFF ~1 s, ON ~2.5 s per step).
+// ---- Fan control (Atomberg-style rotary dial) ----
+// Six levels on a 60°-spaced circle: Speed 1-5 plus Boost. Rotating the dial
+// (or tapping a notch) commits a speed, which the controller applies by
+// cycling the fan relay (OFF ~1 s, ON ~2.5 s per step). The dial hub doubles
+// as the fan's power button.
 
 private val FanMarkAngles = (0 until Protocol.FAN_LEVELS).map { i -> (270 + i * 60) % 360 }
 
@@ -995,90 +970,141 @@ private fun fanLevelName(level: Int): String =
     if (level == Protocol.FAN_LEVEL_BOOST) "Boost" else "Speed $level"
 
 @Composable
-private fun FanSpeedDialog(
+private fun FanCard(
+    on: Boolean,
     level: Int,
     busy: Boolean,
-    fanOn: Boolean,
     enabled: Boolean,
-    onSet: (Int) -> Unit,
-    onDismiss: () -> Unit
+    name: String,
+    iconKey: String,
+    timer: Protocol.TimerInfo?,
+    onToggle: (Boolean) -> Unit,
+    onTimerClick: () -> Unit,
+    onSetSpeed: (Int) -> Unit
 ) {
     val colors = LocalAppColors.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = colors.menuBackground,
-        title = {
-            Column {
-                Text("Fan Speed", color = colors.textPrimary, fontWeight = FontWeight.Bold)
-                Text(
-                    "Atomberg-style · 1–5 + Boost",
-                    color = colors.textTertiary,
-                    fontSize = 12.sp
-                )
-            }
-        },
-        text = {
+    val icon = ChannelCatalog.byKey(iconKey)
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(178.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                FanRotaryDial(
-                    level = level,
-                    busy = busy,
-                    enabled = enabled && !busy,
-                    onLevelCommit = onSet
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon.icon,
+                        contentDescription = icon.label,
+                        tint = if (on) IosGreen else colors.textTertiary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = name,
+                        color = colors.textPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = when {
+                        busy -> "Setting ${fanLevelName(level)}…"
+                        on -> fanLevelName(level)
+                        else -> "Off · tap the hub to turn on"
+                    },
+                    color = when {
+                        busy -> IosOrange
+                        on -> IosGreen
+                        else -> colors.textTertiary
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
                 )
-                if (busy) {
-                    Text(
-                        "Cycling to ${fanLevelName(level)}… ~3.5 s per step",
-                        color = IosOrange,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                } else {
-                    Text(
-                        "Drag the dial to pick a speed. Each level steps the fan relay " +
-                            "OFF ~1 s, ON ~2.5 s — the same rhythm as the wall-switch trick.",
-                        color = colors.textSecondary,
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-                    if (!fanOn) {
+                if (timer != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.glassFill)
+                            .clickable(enabled = enabled) { onTimerClick() }
+                            .padding(start = 8.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Timer,
+                            contentDescription = "Timer",
+                            tint = IosOrange,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
                         Text(
-                            "The fan is OFF — it will be turned on first.",
-                            color = colors.textTertiary,
-                            fontSize = 12.sp
+                            text = "${timer.minutes}m",
+                            color = IosOrange,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Edit timer",
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onTimerClick,
+                        enabled = enabled,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Timer,
+                            contentDescription = "Set fan timer",
+                            tint = colors.textTertiary,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onDismiss,
-                colors = ButtonDefaults.textButtonColors(contentColor = colors.textPrimary)
-            ) {
-                Text("Done")
-            }
+            Spacer(Modifier.width(8.dp))
+            CompactFanDial(
+                on = on,
+                level = level,
+                busy = busy,
+                enabled = enabled,
+                onToggle = { onToggle(!on) },
+                onSetLevel = onSetSpeed
+            )
         }
-    )
+    }
 }
 
 @Composable
-private fun FanRotaryDial(
+private fun CompactFanDial(
+    on: Boolean,
     level: Int,
     busy: Boolean,
     enabled: Boolean,
-    onLevelCommit: (Int) -> Unit
+    onToggle: () -> Unit,
+    onSetLevel: (Int) -> Unit
 ) {
     val colors = LocalAppColors.current
     val haptic = LocalHapticFeedback.current
     val textMeasurer = rememberTextMeasurer()
     var dragPreview by remember { mutableStateOf<Int?>(null) }
     val shownLevel = dragPreview ?: level
+    val dialSize = 128.dp
 
-    fun pick(offset: Offset, boxSize: androidx.compose.ui.geometry.Size) {
-        if (!enabled) return
+    fun pick(offset: Offset, boxSize: Size) {
         val center = Offset(boxSize.width / 2f, boxSize.height / 2f)
         val raw = Math.toDegrees(
             atan2((offset.y - center.y).toDouble(), (offset.x - center.x).toDouble())
@@ -1092,31 +1118,66 @@ private fun FanRotaryDial(
 
     Box(
         modifier = Modifier
-            .size(240.dp)
-            .pointerInput(enabled) {
+            .size(dialSize)
+            .pointerInput(enabled && !busy) {
                 detectDragGestures(
                     onDrag = { change, _ ->
                         pick(change.position, size.toSize())
                         change.consume()
                     },
                     onDragEnd = {
-                        dragPreview?.let { onLevelCommit(it) }
+                        dragPreview?.let(onSetLevel)
                         dragPreview = null
                     },
                     onDragCancel = { dragPreview = null }
                 )
             }
-            .pointerInput(enabled) {
+            .pointerInput(enabled && !busy) {
                 detectTapGestures { offset ->
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    // Taps inside the hub are handled by the power button below.
+                    if ((offset - center).getDistance() <= 28.dp.toPx()) return@detectTapGestures
                     pick(offset, size.toSize())
-                    dragPreview?.let { onLevelCommit(it) }
+                    dragPreview?.let(onSetLevel)
                     dragPreview = null
                 }
             },
         contentAlignment = Alignment.Center
     ) {
+        if (busy) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(5.dp),
+                color = IosOrange,
+                strokeWidth = 3.dp,
+                trackColor = colors.glassBorder
+            )
+        }
         Canvas(Modifier.fillMaxSize()) {
-            drawFanDial(shownLevel, busy, colors, textMeasurer)
+            drawFanDial(shownLevel, busy, on, colors, textMeasurer)
+        }
+        Box(
+            modifier = Modifier
+                .size(54.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        busy -> IosOrange.copy(alpha = 0.18f)
+                        on -> IosGreen.copy(alpha = 0.16f)
+                        else -> colors.segmentedActiveFill
+                    }
+                )
+                .border(1.dp, colors.glassBorder, CircleShape)
+                .clickable(enabled = enabled && !busy) { onToggle() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Power,
+                contentDescription = if (on) "Turn fan off" else "Turn fan on",
+                tint = if (on) IosGreen else colors.textTertiary,
+                modifier = Modifier.size(22.dp)
+            )
         }
     }
 }
@@ -1124,12 +1185,13 @@ private fun FanRotaryDial(
 private fun DrawScope.drawFanDial(
     level: Int,
     busy: Boolean,
+    on: Boolean,
     colors: AppColors,
     textMeasurer: androidx.compose.ui.text.TextMeasurer
 ) {
     val cx = size.width / 2f
     val cy = size.height / 2f
-    val outer = minOf(size.width, size.height) / 2f - 10.dp.toPx()
+    val outer = minOf(size.width, size.height) / 2f - 8.dp.toPx()
     val boost = level == Protocol.FAN_LEVEL_BOOST
 
     drawCircle(
@@ -1139,24 +1201,25 @@ private fun DrawScope.drawFanDial(
         style = Stroke(2.dp.toPx())
     )
 
-    // LED dots around the ring — lit like the fan's indicator disk.
+    // LED dots around the ring — lit like the fan's indicator disk. When the
+    // fan is off, the dots stay dim to show the dial is idle.
     for (i in 0 until Protocol.FAN_LEVELS) {
         val angle = Math.toRadians(FanMarkAngles[i].toDouble())
         val pos = Offset(
             cx + cos(angle).toFloat() * outer,
             cy + sin(angle).toFloat() * outer
         )
-        val lit = i < level
+        val lit = i < level && on
         val ledColor = when {
-            boost && lit -> IosOrange
+            lit && boost -> IosOrange
             lit -> IosGreen
             else -> colors.textTertiary.copy(alpha = 0.35f)
         }
-        drawCircle(color = ledColor, radius = 7.dp.toPx(), center = pos)
+        drawCircle(color = ledColor, radius = 5.dp.toPx(), center = pos)
     }
 
     // Level labels inside the LED ring.
-    val labelRadius = outer - 28.dp.toPx()
+    val labelRadius = outer - 19.dp.toPx()
     for (i in 0 until Protocol.FAN_LEVELS) {
         val angle = Math.toRadians(FanMarkAngles[i].toDouble())
         val pos = Offset(
@@ -1167,8 +1230,8 @@ private fun DrawScope.drawFanDial(
         val layout = textMeasurer.measure(
             AnnotatedString(text),
             style = TextStyle(
-                color = if (i + 1 == level) colors.textPrimary else colors.textTertiary,
-                fontSize = 13.sp,
+                color = if (i + 1 == level) colors.textPrimary else colors.textTertiary.copy(alpha = 0.75f),
+                fontSize = 8.sp,
                 fontWeight = FontWeight.SemiBold
             )
         )
@@ -1182,45 +1245,32 @@ private fun DrawScope.drawFanDial(
     val sel = level - 1
     val selAngle = Math.toRadians(FanMarkAngles[sel].toDouble())
     val needleStart = Offset(
-        cx + cos(selAngle).toFloat() * 42.dp.toPx(),
-        cy + sin(selAngle).toFloat() * 42.dp.toPx()
+        cx + cos(selAngle).toFloat() * 34.dp.toPx(),
+        cy + sin(selAngle).toFloat() * 34.dp.toPx()
     )
     val needleEnd = Offset(
-        cx + cos(selAngle).toFloat() * (outer - 2.dp.toPx()),
-        cy + sin(selAngle).toFloat() * (outer - 2.dp.toPx())
+        cx + cos(selAngle).toFloat() * (outer - 1.dp.toPx()),
+        cy + sin(selAngle).toFloat() * (outer - 1.dp.toPx())
     )
     drawLine(
-        color = if (busy) IosOrange.copy(alpha = 0.65f) else colors.textPrimary,
+        color = when {
+            busy -> IosOrange.copy(alpha = 0.65f)
+            on -> colors.textPrimary
+            else -> colors.textTertiary.copy(alpha = 0.45f)
+        },
         start = needleStart,
         end = needleEnd,
-        strokeWidth = 5.dp.toPx(),
+        strokeWidth = 4.dp.toPx(),
         cap = StrokeCap.Round
     )
 
-    // Center hub with the current level.
-    drawCircle(color = colors.segmentedActiveFill, radius = 34.dp.toPx(), center = Offset(cx, cy))
+    // Center hub (the power button lives on top as a composable overlay).
+    drawCircle(color = colors.segmentedActiveFill, radius = 27.dp.toPx(), center = Offset(cx, cy))
     drawCircle(
         color = colors.glassBorder,
-        radius = 34.dp.toPx(),
+        radius = 27.dp.toPx(),
         center = Offset(cx, cy),
         style = Stroke(1.dp.toPx())
-    )
-    val hubText = when {
-        boost -> "B"
-        busy -> "…"
-        else -> "$level"
-    }
-    val hub = textMeasurer.measure(
-        AnnotatedString(hubText),
-        style = TextStyle(
-            color = colors.textPrimary,
-            fontSize = if (boost) 20.sp else 24.sp,
-            fontWeight = FontWeight.Bold
-        )
-    )
-    drawText(
-        hub,
-        topLeft = Offset(cx - hub.size.width / 2f, cy - hub.size.height / 2f)
     )
 }
 
